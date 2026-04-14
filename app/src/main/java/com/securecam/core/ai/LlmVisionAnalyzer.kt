@@ -11,6 +11,7 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -101,14 +102,13 @@ class LlmVisionAnalyzer(private val context: Context) {
             try {
                 val eng = engine ?: throw IllegalStateException("Engine null")
 
-                // COMPILER FIX: Use Doubles for topP/temperature, use maxTokens parameter name
+                // COMPILER FIX: Removed maxTokens parameter because SamplerConfig doesn't have it
                 val conversation = eng.createConversation(
                     ConversationConfig(
                         samplerConfig = SamplerConfig(
                             topK = 40,
                             topP = 0.95,
-                            temperature = 0.4,
-                            maxTokens = maxOutputTokens
+                            temperature = 0.4
                         ),
                         systemInstruction = Contents.of(systemPrompt)
                     )
@@ -118,10 +118,13 @@ class LlmVisionAnalyzer(private val context: Context) {
                 val contents = Contents.of(listOf(Content.ImageBytes(imageBytes), Content.Text(userPrompt)))
 
                 val sb = StringBuilder()
-                // COMPILER FIX: Reverted to message.toString() to fix unresolved 'text' reference
-                conversation.sendMessageAsync(contents).collect { message ->
-                    sb.append(message.toString())
-                }
+                
+                // COMPILER FIX: Manually enforce maxOutputTokens using Flow.take()
+                conversation.sendMessageAsync(contents)
+                    .take(maxOutputTokens)
+                    .collect { message ->
+                        sb.append(message.toString())
+                    }
 
                 withContext(Dispatchers.Main) { onDone(sb.toString().trim()) }
                 conversation.close()
