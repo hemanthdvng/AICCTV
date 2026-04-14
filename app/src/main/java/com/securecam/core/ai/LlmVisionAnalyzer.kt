@@ -64,7 +64,7 @@ class LlmVisionAnalyzer(private val context: Context) {
 
                 val backendConfig = when (backendType) {
                     "GPU" -> Backend.GPU()
-                    "NPU" -> Backend.GPU() 
+                    "NPU" -> Backend.CPU() 
                     else  -> Backend.CPU()
                 }
 
@@ -89,7 +89,6 @@ class LlmVisionAnalyzer(private val context: Context) {
         bitmap: Bitmap,
         systemPrompt: String,
         userPrompt: String,
-        maxOutputTokens: Int = 280,
         imgMaxDim: Int = 512,
         onToken: (String) -> Unit,
         onDone: (String) -> Unit,
@@ -102,14 +101,10 @@ class LlmVisionAnalyzer(private val context: Context) {
             try {
                 val eng = engine ?: throw IllegalStateException("Engine null")
 
-                // SDK 0.10.0 Compatibility: Double types and no maxOutputTokens parameter
+                // SDK 0.10.0 Compat: Floats to Doubles, no maxOutputTokens
                 val conversation = eng.createConversation(
                     ConversationConfig(
-                        samplerConfig = SamplerConfig(
-                            topK = 40,
-                            topP = 0.95,
-                            temperature = 0.4
-                        ),
+                        samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 0.4),
                         systemInstruction = Contents.of(systemPrompt)
                     )
                 )
@@ -119,12 +114,10 @@ class LlmVisionAnalyzer(private val context: Context) {
 
                 val sb = StringBuilder()
                 
-                // SDK 0.10.0 Compatibility: use message.toString()
+                // SDK 0.10.0 Compat: use message.toString()
                 conversation.sendMessageAsync(contents)
                     .catch { e -> withContext(Dispatchers.Main) { onError(e.message ?: "Stream error") } }
-                    .collect { message -> 
-                        sb.append(message.toString()) 
-                    }
+                    .collect { message -> sb.append(message.toString()) }
 
                 conversation.close()
                 withContext(Dispatchers.Main) { onDone(sb.toString().trim()) }
