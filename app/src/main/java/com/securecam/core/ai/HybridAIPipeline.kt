@@ -2,6 +2,7 @@ package com.securecam.core.ai
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.google.mlkit.vision.common.InputImage
@@ -30,30 +31,27 @@ class HybridAIPipeline @Inject constructor(
     private val llmAnalyzer = LlmVisionAnalyzer(context)
     private val biometricEngine = BiometricEngine(context)
     
-    // ARCH 1, BUG 5: Thread-safe atomic states
     private val isLlmBusy = AtomicBoolean(false)
     private val isStarted = AtomicBoolean(false)
 
-    // ARCH 3: Thread-safe mutable state instead of global companion
     val activeVideoPath = AtomicReference<String?>(null)
     val activeVideoEndTime = AtomicLong(0L)
 
-    // PERF 2: Lazy pref cache
+    // TIMING FIX: State memory for the user's sliding interval logic
+    private var lastLlmAnalysisTime = 0L
+
     private val prefs by lazy { context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE) }
     
-    // PERF 1: Cache ML Kit Face Detector
     private val faceDetector by lazy { 
         FaceDetection.getClient(FaceDetectorOptions.Builder().setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST).build())
     }
     
-    // PERF 3: Cache parsed JSON registry
     private var cachedFaces: List<RegisteredFace> = emptyList()
     private var cachedFacesJson: String = ""
 
     fun start() {
-        if (isStarted.getAndSet(true)) return // Prevent double init
+        if (isStarted.getAndSet(true)) return 
         
-        // BUG 2 FIX: Broadcast init errors instead of swallowing silently
         llmAnalyzer.initialize { result ->
             when (result) {
                 is LlmVisionAnalyzer.InitResult.ModelNotFound -> 
@@ -87,7 +85,6 @@ class HybridAIPipeline @Inject constructor(
                         val facesList = faceDetector.process(inputImage).await()
 
                         if (facesList.isNotEmpty()) {
-                            // PERF 3: Cache JSON mapping
                             val json = prefs.getString("authorized_faces", "[]") ?: "[]"
                             if (json != cachedFacesJson) {
                                 cachedFacesJson = json
@@ -131,10 +128,23 @@ class HybridAIPipeline @Inject constructor(
                     } catch (e: Exception) {}
                 }
 
+                val analysisIntervalSec = prefs.getInt("llm_analysis_interval", 5)
+                val analysisIntervalMs = analysisIntervalSec * 1000L
+                val now = System.currentTimeMillis()
+
                 if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy.get()) {
                     bitmap.recycle(); return@launch
                 }
+
+                // TIMING LOGIC: Wait until interval has passed since the LAST analysis started
+                // If LLM takes 3s, drop all frames until 5s passes. If LLM takes 6s, 6 > 5, so we trigger immediately upon clearing.
+                if (now - lastLlmAnalysisTime < analysisIntervalMs) {
+                    bitmap.recycle(); return@launch
+                }
+
+                lastLlmAnalysisTime = System.currentTimeMillis()
                 triggerLlmAnalysis(bitmap)
+
             } catch (e: Throwable) { bitmap.recycle() }
         }
     }
@@ -147,9 +157,8 @@ class HybridAIPipeline @Inject constructor(
         val aiImgResolution = prefs.getInt("ai_img_resolution", 512)
 
         try {
-            val timedOut = withTimeoutOrNull(15000L) {
+            val timedOut = withTimeoutOrNull(25000L) {
                 suspendCancellableCoroutine<Boolean> { continuation ->
-                    // OPTION 1A: Prompt controls token generation
                     val sysPrompt = "You are a concise security camera AI. Analyze the image and respond in $llmResolution tokens or fewer."
                     llmAnalyzer.analyze(
                         bitmap = bitmap,
@@ -159,7 +168,7 @@ class HybridAIPipeline @Inject constructor(
                         onToken = { },
                         onDone = { text ->
                             val output = text.trim()
-                            val isSafe = output.contains("CLEAR", ignoreCase = true)
+                            val isSafe = output.contains("CLEAR", ignoreCase = true) || output.isEmpty()
                             aiScope.launch {
                                 val now = System.currentTimeMillis()
                                 if (!isSafe) {
@@ -173,11 +182,17 @@ class HybridAIPipeline @Inject constructor(
                             }
                             if (continuation.isActive) continuation.resume(true)
                         },
-                        onError = { if (continuation.isActive) continuation.resume(false) }
+                        onError = { err ->
+                            Log.e("HybridAIPipeline", "LLM Error: $err")
+                            if (continuation.isActive) continuation.resume(false)
+                        }
                     )
                 }
             }
-            if (timedOut == null) llmAnalyzer.cancelCurrentInference()
+            if (timedOut == null) {
+                Log.w("HybridAIPipeline", "Inference timed out. Enforcing C++ thread halt.")
+                llmAnalyzer.cancelCurrentInference()
+            }
         } finally {
             isLlmBusy.set(false)
             if (!bitmap.isRecycled) bitmap.recycle()
