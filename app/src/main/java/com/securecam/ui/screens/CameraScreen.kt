@@ -122,8 +122,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
         var isCurrentlyRecording by remember { mutableStateOf(false) }
         var isSavingVideo by remember { mutableStateOf(false) }
 
-        // FIX #12: Intercept back button so app returns to main screen
-        // instead of exiting. WatchTowerService keeps the process alive.
         BackHandler {
             navController.navigate("main") {
                 popUpTo("main") { inclusive = true }
@@ -165,23 +163,18 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
             } else { tts?.stop() }
         }
 
-        // FIX #1: Register the frame listener EXACTLY ONCE using DisposableEffect.
-        // The previous pattern (while(isActive) { addFrameListener(...); delay(200) })
-        // registered a NEW listener every 200ms without removing the old ones.
-        // After 5 minutes this created 1,500 active listeners all receiving every frame,
-        // all copying bitmaps, all calling MJPEG/DVR writes — saturating the CPU
-        // and making AI analysis appear extremely slow.
         DisposableEffect(localRenderer) {
             val frameListener = org.webrtc.EglRenderer.FrameListener { bitmap ->
                 try {
+                    // PERF 4: Save memory by copying exactly what is needed for DVR and LLM
                     val bmpCopy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
                     if (bmpCopy != null) {
                         mjpegServer.updateFrame(bmpCopy)
 
                         val now = System.currentTimeMillis()
-                        val endTime = HybridAIPipeline.activeVideoEndTime
+                        val endTime = viewModel.aiPipeline.activeVideoEndTime.get()
 
-                        if (now < endTime && HybridAIPipeline.activeVideoPath != null) {
+                        if (now < endTime && viewModel.aiPipeline.activeVideoPath.get() != null) {
                             val vidRes = prefs.getInt("video_resolution", 720)
                             val scaledBmp = if (bmpCopy.height > vidRes) {
                                 val ratio = bmpCopy.width.toFloat() / bmpCopy.height.toFloat()
@@ -194,7 +187,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                                 try {
                                     val w = scaledBmp.width - (scaledBmp.width % 16)
                                     val h = scaledBmp.height - (scaledBmp.height % 16)
-                                    dvrEngine.triggerRecording(HybridAIPipeline.activeVideoPath ?: "alert_${now}.mp4", w, h)
+                                    dvrEngine.triggerRecording(viewModel.aiPipeline.activeVideoPath.get() ?: "alert_${now}.mp4", w, h)
                                 } catch (e: Exception) {}
                             }
 
@@ -222,11 +215,10 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
         LaunchedEffect(forceScanTrigger, scanIntervalMs) {
             while (isActive) {
                 delay(if (forceScanTrigger > 0) 500 else scanIntervalMs)
-                // Wait if AI is still processing the previous frame before sending another
                 while (viewModel.aiPipeline.isBusy() && isActive) { delay(100) }
                 latestBitmapRef.getAndSet(null)?.let { bmp ->
                     if (!bmp.isRecycled) {
-                        try { val copy = bmp.copy(Bitmap.Config.ARGB_8888, false); if (copy != null) { viewModel.aiPipeline.processFrame(copy) } } catch (e: Exception) {}
+                        try { val copy = bmp.copy(Bitmap.Config.RGB_565, false); if (copy != null) { viewModel.aiPipeline.processFrame(copy) } } catch (e: Exception) {}
                         bmp.recycle()
                     }
                 }
@@ -252,9 +244,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
         }
 
         DisposableEffect(Unit) {
-            // FIX #12: Start WatchTowerService as a foreground service when camera is active.
-            // This keeps the process alive when the user presses HOME, prevents Android
-            // from killing the app, and shows a persistent notification.
             val watchTowerIntent = Intent(context, WatchTowerService::class.java)
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -367,7 +356,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                             (map["video_resolution"] as? Double)?.let { putInt("video_resolution", it.toInt()) }
                             (map["llm_resolution"] as? Double)?.let { putInt("llm_resolution", it.toInt()) }
                             (map["ai_img_resolution"] as? Double)?.let { putInt("ai_img_resolution", it.toInt()) }
-                            (map["confidence_threshold"] as? Double)?.let { putFloat("confidence_threshold", it.toFloat()) }
                             (map["prompt_usr"] as? String)?.let { putString("prompt_usr", it) }
                             (map["llm_enabled"] as? Boolean)?.let { putBoolean("llm_enabled", it) }
                             (map["face_recog_enabled"] as? Boolean)?.let { putBoolean("face_recog_enabled", it) }
