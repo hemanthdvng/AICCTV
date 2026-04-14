@@ -120,6 +120,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                 val socket = Socket(ip, 8081)
                 val out = PrintWriter(socket.getOutputStream(), true)
                 out.println(token)
+                // OPTION 3B: Removed confidence_threshold from payload
                 val syncData = mapOf(
                     "type" to "SYNC_SETTINGS",
                     "scan_interval_sec" to prefs.getFloat("scan_interval_sec", 5f).toDouble(),
@@ -128,7 +129,6 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                     "video_resolution" to prefs.getInt("video_resolution", 720),
                     "llm_resolution" to prefs.getInt("llm_resolution", 280),
                     "ai_img_resolution" to prefs.getInt("ai_img_resolution", 512),
-                    "confidence_threshold" to prefs.getFloat("confidence_threshold", 0.60f).toDouble(),
                     "prompt_usr" to prefs.getString("prompt_usr", ""),
                     "llm_enabled" to prefs.getBoolean("llm_enabled", true),
                     "face_recog_enabled" to prefs.getBoolean("face_recog_enabled", false),
@@ -216,11 +216,9 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     var llmResolution by remember { mutableStateOf(prefs.getInt("llm_resolution", 280)) }
     var resExpanded by remember { mutableStateOf(false) }
 
-    // FIX #2: AI frame image resolution (pixels sent to the AI vision encoder)
     var aiImgResolution by remember { mutableStateOf(prefs.getInt("ai_img_resolution", 512)) }
     var imgResExpanded by remember { mutableStateOf(false) }
 
-    // FIX #4/#8: AI inference backend selector (CPU / GPU)
     var aiBackend by remember { mutableStateOf(prefs.getString("ai_backend", "CPU") ?: "CPU") }
     var backendExpanded by remember { mutableStateOf(false) }
 
@@ -342,7 +340,6 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
 
-            // FIX #9: Updated description to reflect that faces ARE synced when you push settings
             Text("Local Biometric Vault", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(8.dp))
             Text("Upload a photo to register a face. The AI auto-crops and extracts the face embedding. Embeddings are synced to the camera device when you push settings.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
@@ -368,7 +365,6 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(modifier = Modifier.weight(1f)) { Text("Enable Face Recognition") }; Switch(checked = faceRecogEnabled, onCheckedChange = { faceRecogEnabled = it; prefs.edit().putBoolean("face_recog_enabled", it).apply() }) }
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(modifier = Modifier.weight(1f)) { Text("Verbose Debug Mode", style = MaterialTheme.typography.bodySmall, color = Color.Gray) }; Switch(checked = debugMode, onCheckedChange = { debugMode = it; prefs.edit().putBoolean("debug_mode", it).apply() }) }
 
-            // FIX #4/#8: AI Inference Backend selector
             Spacer(modifier = Modifier.height(16.dp))
             Text("AI Inference Backend", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(4.dp))
@@ -393,7 +389,6 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // FIX #2: AI frame resolution controls pixels sent to the vision encoder
             Text("AI Vision Frame Resolution", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(4.dp))
             Text("Pixel size of the image sent to the AI. 512px is the best balance of speed and accuracy. 768-1080px gives more detail but is significantly slower. 256px is fastest.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
@@ -409,10 +404,9 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // FIX #11: Token budget description updated to reflect it controls output LENGTH
             Text("AI Response Token Budget", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(4.dp))
-            Text("Controls the maximum length of the AI's text response. 70–140 tokens is very fast for simple 'yes/no' alerts. 280 tokens is recommended for most use cases. 560–1120 allows detailed multi-object descriptions.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            Text("Controls the target length of the AI's text response. Passed into the System Prompt. 280 tokens is recommended for most use cases.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             Spacer(modifier = Modifier.height(8.dp))
             ExposedDropdownMenuBox(expanded = resExpanded, onExpandedChange = { resExpanded = !resExpanded }) {
                 OutlinedTextField(value = "$llmResolution Tokens", onValueChange = {}, readOnly = true, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = resExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth(), colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors())
