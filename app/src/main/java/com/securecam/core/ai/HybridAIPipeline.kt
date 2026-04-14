@@ -14,6 +14,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlin.coroutines.resume
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,50 +29,75 @@ class HybridAIPipeline @Inject constructor(
     private val aiScope = CoroutineScope(aiDispatcher + SupervisorJob())
     private val llmAnalyzer = LlmVisionAnalyzer(context)
     private val biometricEngine = BiometricEngine(context)
-    private var isLlmBusy = false
+    
+    // ARCH 1, BUG 5: Thread-safe atomic states
+    private val isLlmBusy = AtomicBoolean(false)
+    private val isStarted = AtomicBoolean(false)
 
-    // FIX #12: Rolling Timer state for DVR recording coordination
-    companion object {
-        var activeVideoPath: String? = null
-        var activeVideoEndTime: Long = 0L
+    // ARCH 3: Thread-safe mutable state instead of global companion
+    val activeVideoPath = AtomicReference<String?>(null)
+    val activeVideoEndTime = AtomicLong(0L)
+
+    // PERF 2: Lazy pref cache
+    private val prefs by lazy { context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE) }
+    
+    // PERF 1: Cache ML Kit Face Detector
+    private val faceDetector by lazy { 
+        FaceDetection.getClient(FaceDetectorOptions.Builder().setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST).build())
     }
+    
+    // PERF 3: Cache parsed JSON registry
+    private var cachedFaces: List<RegisteredFace> = emptyList()
+    private var cachedFacesJson: String = ""
 
     fun start() {
-        llmAnalyzer.initialize {}
+        if (isStarted.getAndSet(true)) return // Prevent double init
+        
+        // BUG 2 FIX: Broadcast init errors instead of swallowing silently
+        llmAnalyzer.initialize { result ->
+            when (result) {
+                is LlmVisionAnalyzer.InitResult.ModelNotFound -> 
+                    aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "[SYSTEM] LLM model not found. Download from Settings.", 1.0f)) }
+                is LlmVisionAnalyzer.InitResult.Error -> 
+                    aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "[SYSTEM] LLM init failed: ${result.message}", 1.0f)) }
+                LlmVisionAnalyzer.InitResult.Success -> { /* ready */ }
+            }
+        }
         aiScope.launch { try { biometricEngine.initialize() } catch (e: Exception) {} }
     }
 
     fun stop() {
         llmAnalyzer.close()
         try { biometricEngine.close() } catch (e: Exception) {}
-        isLlmBusy = false
+        try { faceDetector.close() } catch (e: Exception) {}
+        isLlmBusy.set(false)
+        isStarted.set(false)
     }
 
-    // Expose busy state so CameraScreen can wait before sending next frame
-    fun isBusy(): Boolean = isLlmBusy
+    fun isBusy(): Boolean = isLlmBusy.get()
 
     fun processFrame(bitmap: Bitmap) {
         aiScope.launch {
             try {
-                val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
                 var skipLlm = false
 
                 if (prefs.getBoolean("face_recog_enabled", false)) {
                     try {
                         val inputImage = InputImage.fromBitmap(bitmap, 0)
-                        val facesList = FaceDetection.getClient(
-                            FaceDetectorOptions.Builder()
-                                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-                                .build()
-                        ).process(inputImage).await()
+                        val facesList = faceDetector.process(inputImage).await()
 
                         if (facesList.isNotEmpty()) {
-                            val savedFacesJson = prefs.getString("authorized_faces", "[]") ?: "[]"
-                            val type = object : TypeToken<List<RegisteredFace>>() {}.type
-                            val savedFaces: List<RegisteredFace> = Gson().fromJson(savedFacesJson, type) ?: emptyList()
+                            // PERF 3: Cache JSON mapping
+                            val json = prefs.getString("authorized_faces", "[]") ?: "[]"
+                            if (json != cachedFacesJson) {
+                                cachedFacesJson = json
+                                val type = object : TypeToken<List<RegisteredFace>>() {}.type
+                                cachedFaces = Gson().fromJson(json, type) ?: emptyList()
+                            }
+                            
                             val recognizedNames = mutableSetOf<String>()
 
-                            if (savedFaces.isNotEmpty()) {
+                            if (cachedFaces.isNotEmpty()) {
                                 for (mlFace in facesList) {
                                     val bounds = mlFace.boundingBox
                                     val size = maxOf(bounds.width(), bounds.height())
@@ -80,7 +108,7 @@ class HybridAIPipeline @Inject constructor(
                                     val croppedFace = Bitmap.createBitmap(bitmap, left, top, w, h)
                                     val currentFaceVector = biometricEngine.getFaceEmbedding(croppedFace)
                                     if (currentFaceVector != null) {
-                                        for (face in savedFaces) {
+                                        for (face in cachedFaces) {
                                             if (biometricEngine.calculateCosineSimilarity(currentFaceVector, face.vector) > 0.65f) {
                                                 recognizedNames.add(face.name); break
                                             }
@@ -92,10 +120,10 @@ class HybridAIPipeline @Inject constructor(
                                     val namesList = recognizedNames.joinToString(", ")
                                     val now = System.currentTimeMillis()
                                     val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
-                                    if (now > activeVideoEndTime) { activeVideoPath = "face_${now}.mp4" }
-                                    activeVideoEndTime = now + recordLenMs
-                                    prefs.edit().putString("active_dvr_file", activeVideoPath).apply()
-                                    eventRepository.emitEvent(SecurityEvent("BIOMETRIC", "🛡️ Authorized Face(s) Detected: $namesList", 1.0f, activeVideoPath))
+                                    if (now > activeVideoEndTime.get()) { activeVideoPath.set("face_${now}.mp4") }
+                                    activeVideoEndTime.set(now + recordLenMs)
+                                    prefs.edit().putString("active_dvr_file", activeVideoPath.get()).apply()
+                                    eventRepository.emitEvent(SecurityEvent("BIOMETRIC", "🛡️ Authorized Face(s) Detected: $namesList", 1.0f, activeVideoPath.get()))
                                     skipLlm = true
                                 }
                             }
@@ -103,7 +131,7 @@ class HybridAIPipeline @Inject constructor(
                     } catch (e: Exception) {}
                 }
 
-                if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy) {
+                if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy.get()) {
                     bitmap.recycle(); return@launch
                 }
                 triggerLlmAnalysis(bitmap)
@@ -112,25 +140,21 @@ class HybridAIPipeline @Inject constructor(
     }
 
     private suspend fun triggerLlmAnalysis(bitmap: Bitmap) {
-        isLlmBusy = true
-        val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
-        val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
+        isLlmBusy.set(true)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
         val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
-        // FIX #11: llmResolution now maps to real maxOutputTokens (not just a prompt string)
         val llmResolution = prefs.getInt("llm_resolution", 280)
-        // FIX #2: ai_img_resolution controls the pixel size sent to the AI vision encoder
         val aiImgResolution = prefs.getInt("ai_img_resolution", 512)
 
         try {
             val timedOut = withTimeoutOrNull(15000L) {
                 suspendCancellableCoroutine<Boolean> { continuation ->
+                    // OPTION 1A: Prompt controls token generation
                     val sysPrompt = "You are a concise security camera AI. Analyze the image and respond in $llmResolution tokens or fewer."
                     llmAnalyzer.analyze(
                         bitmap = bitmap,
                         systemPrompt = sysPrompt,
                         userPrompt = customPrompt,
-                        maxOutputTokens = llmResolution,
                         imgMaxDim = aiImgResolution,
                         onToken = { },
                         onDone = { text ->
@@ -139,13 +163,13 @@ class HybridAIPipeline @Inject constructor(
                             aiScope.launch {
                                 val now = System.currentTimeMillis()
                                 if (!isSafe) {
-                                    if (now > activeVideoEndTime) { activeVideoPath = "alert_${now}.mp4" }
-                                    activeVideoEndTime = now + recordLenMs
-                                    prefs.edit().putString("active_dvr_file", activeVideoPath).apply()
+                                    if (now > activeVideoEndTime.get()) { activeVideoPath.set("alert_${now}.mp4") }
+                                    activeVideoEndTime.set(now + recordLenMs)
+                                    prefs.edit().putString("active_dvr_file", activeVideoPath.get()).apply()
                                 }
-                                val vidPath = if (isSafe) null else activeVideoPath
+                                val vidPath = if (isSafe) null else activeVideoPath.get()
                                 val finalDesc = if (isSafe) "🔍 SCAN: Safe / No Trigger found" else "🚨 $output"
-                                eventRepository.emitEvent(SecurityEvent("LLM_INSIGHT", finalDesc, confThreshold, vidPath))
+                                eventRepository.emitEvent(SecurityEvent("LLM_INSIGHT", finalDesc, 1.0f, vidPath))
                             }
                             if (continuation.isActive) continuation.resume(true)
                         },
@@ -153,13 +177,9 @@ class HybridAIPipeline @Inject constructor(
                     )
                 }
             }
-            // FIX #6: If 15s timeout fires, explicitly cancel the running inference
-            // so it doesn't keep burning CPU after we've given up waiting
-            if (timedOut == null) {
-                llmAnalyzer.cancelCurrentInference()
-            }
+            if (timedOut == null) llmAnalyzer.cancelCurrentInference()
         } finally {
-            isLlmBusy = false
+            isLlmBusy.set(false)
             if (!bitmap.isRecycled) bitmap.recycle()
         }
     }
