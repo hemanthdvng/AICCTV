@@ -70,8 +70,8 @@ class LlmVisionAnalyzer(private val context: Context) {
 
                 val cfg = EngineConfig(
                     modelPath = modelFile.absolutePath,
-                    backend = backendConfig, // Main text inference can safely use GPU
-                    visionBackend = Backend.CPU(), // CRITICAL FIX: Vision backend MUST use CPU to prevent SIGSEGV crashes
+                    backend = backendConfig,
+                    visionBackend = backendConfig, // REVERTED: Restored dynamic backend configuration for Vision
                     cacheDir = context.cacheDir.absolutePath
                 )
 
