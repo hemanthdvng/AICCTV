@@ -18,14 +18,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class HybridAIPipeline @Inject constructor(@ApplicationContext private val context: Context, private val eventRepository: EventRepository) {
+class HybridAIPipeline @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val eventRepository: EventRepository
+) {
     private val aiDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val aiScope = CoroutineScope(aiDispatcher + SupervisorJob())
     private val llmAnalyzer = LlmVisionAnalyzer(context)
     private val biometricEngine = BiometricEngine(context)
     private var isLlmBusy = false
 
-    // CRITICAL FIX: The Rolling Timer prevents simultaneous overlapping alerts from creating duplicate blank videos
+    // FIX #12: Rolling Timer state for DVR recording coordination
     companion object {
         var activeVideoPath: String? = null
         var activeVideoEndTime: Long = 0L
@@ -35,17 +38,31 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
         llmAnalyzer.initialize {}
         aiScope.launch { try { biometricEngine.initialize() } catch (e: Exception) {} }
     }
-    fun stop() { llmAnalyzer.close(); try { biometricEngine.close() } catch (e: Exception) {}; isLlmBusy = false }
+
+    fun stop() {
+        llmAnalyzer.close()
+        try { biometricEngine.close() } catch (e: Exception) {}
+        isLlmBusy = false
+    }
+
+    // Expose busy state so CameraScreen can wait before sending next frame
+    fun isBusy(): Boolean = isLlmBusy
 
     fun processFrame(bitmap: Bitmap) {
         aiScope.launch {
             try {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
                 var skipLlm = false
+
                 if (prefs.getBoolean("face_recog_enabled", false)) {
                     try {
                         val inputImage = InputImage.fromBitmap(bitmap, 0)
-                        val facesList = FaceDetection.getClient(FaceDetectorOptions.Builder().setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST).build()).process(inputImage).await()
+                        val facesList = FaceDetection.getClient(
+                            FaceDetectorOptions.Builder()
+                                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                                .build()
+                        ).process(inputImage).await()
+
                         if (facesList.isNotEmpty()) {
                             val savedFacesJson = prefs.getString("authorized_faces", "[]") ?: "[]"
                             val type = object : TypeToken<List<RegisteredFace>>() {}.type
@@ -60,34 +77,35 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                                     val top = (bounds.centerY() - size / 2).coerceAtLeast(0)
                                     val w = minOf(size, bitmap.width - left).coerceAtLeast(1)
                                     val h = minOf(size, bitmap.height - top).coerceAtLeast(1)
-
                                     val croppedFace = Bitmap.createBitmap(bitmap, left, top, w, h)
                                     val currentFaceVector = biometricEngine.getFaceEmbedding(croppedFace)
                                     if (currentFaceVector != null) {
                                         for (face in savedFaces) {
-                                            if (biometricEngine.calculateCosineSimilarity(currentFaceVector, face.vector) > 0.65f) { recognizedNames.add(face.name); break }
+                                            if (biometricEngine.calculateCosineSimilarity(currentFaceVector, face.vector) > 0.65f) {
+                                                recognizedNames.add(face.name); break
+                                            }
                                         }
                                     }
                                     croppedFace.recycle()
                                 }
                                 if (recognizedNames.isNotEmpty()) {
                                     val namesList = recognizedNames.joinToString(", ")
-                                    
-                                    // Rolling Timer Logic for Faces
                                     val now = System.currentTimeMillis()
                                     val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
                                     if (now > activeVideoEndTime) { activeVideoPath = "face_${now}.mp4" }
                                     activeVideoEndTime = now + recordLenMs
                                     prefs.edit().putString("active_dvr_file", activeVideoPath).apply()
-
                                     eventRepository.emitEvent(SecurityEvent("BIOMETRIC", "🛡️ Authorized Face(s) Detected: $namesList", 1.0f, activeVideoPath))
                                     skipLlm = true
                                 }
                             }
                         }
-                    } catch (e: Exception) {} 
+                    } catch (e: Exception) {}
                 }
-                if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy) { bitmap.recycle(); return@launch }
+
+                if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy) {
+                    bitmap.recycle(); return@launch
+                }
                 triggerLlmAnalysis(bitmap)
             } catch (e: Throwable) { bitmap.recycle() }
         }
@@ -99,32 +117,32 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
         val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
-        val llmResolution = prefs.getInt("llm_resolution", 280) // Captures token budget from settings
+        // FIX #11: llmResolution now maps to real maxOutputTokens (not just a prompt string)
+        val llmResolution = prefs.getInt("llm_resolution", 280)
+        // FIX #2: ai_img_resolution controls the pixel size sent to the AI vision encoder
+        val aiImgResolution = prefs.getInt("ai_img_resolution", 512)
 
         try {
-            withTimeoutOrNull(15000L) {
+            val timedOut = withTimeoutOrNull(15000L) {
                 suspendCancellableCoroutine<Boolean> { continuation ->
-                    val sysPrompt = "You are a direct computer vision evaluator. Process this image using a token budget of $llmResolution tokens."
+                    val sysPrompt = "You are a concise security camera AI. Analyze the image and respond in $llmResolution tokens or fewer."
                     llmAnalyzer.analyze(
-                        bitmap = bitmap, 
-                        systemPrompt = sysPrompt, 
-                        userPrompt = customPrompt, 
+                        bitmap = bitmap,
+                        systemPrompt = sysPrompt,
+                        userPrompt = customPrompt,
+                        maxOutputTokens = llmResolution,
+                        imgMaxDim = aiImgResolution,
                         onToken = { },
-                        onDone = { text -> 
+                        onDone = { text ->
                             val output = text.trim()
                             val isSafe = output.contains("CLEAR", ignoreCase = true)
-                            
                             aiScope.launch {
                                 val now = System.currentTimeMillis()
                                 if (!isSafe) {
-                                    // Rolling Timer Logic for AI Threats
-                                    if (now > activeVideoEndTime) {
-                                        activeVideoPath = "alert_${now}.mp4"
-                                    }
+                                    if (now > activeVideoEndTime) { activeVideoPath = "alert_${now}.mp4" }
                                     activeVideoEndTime = now + recordLenMs
                                     prefs.edit().putString("active_dvr_file", activeVideoPath).apply()
                                 }
-
                                 val vidPath = if (isSafe) null else activeVideoPath
                                 val finalDesc = if (isSafe) "🔍 SCAN: Safe / No Trigger found" else "🚨 $output"
                                 eventRepository.emitEvent(SecurityEvent("LLM_INSIGHT", finalDesc, confThreshold, vidPath))
@@ -135,6 +153,14 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                     )
                 }
             }
-        } finally { isLlmBusy = false; if (!bitmap.isRecycled) bitmap.recycle() }
+            // FIX #6: If 15s timeout fires, explicitly cancel the running inference
+            // so it doesn't keep burning CPU after we've given up waiting
+            if (timedOut == null) {
+                llmAnalyzer.cancelCurrentInference()
+            }
+        } finally {
+            isLlmBusy = false
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
     }
 }
