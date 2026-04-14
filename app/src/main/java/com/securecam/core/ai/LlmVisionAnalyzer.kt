@@ -62,17 +62,16 @@ class LlmVisionAnalyzer(private val context: Context) {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
                 backendType = prefs.getString("ai_backend", "CPU") ?: "CPU"
 
-                // OPTION 4B: NPU falls back to CPU to prevent native SIGSEGV on unsupported chips
                 val backendConfig = when (backendType) {
                     "GPU" -> Backend.GPU()
-                    "NPU" -> Backend.CPU() 
+                    "NPU" -> Backend.GPU() 
                     else  -> Backend.CPU()
                 }
 
                 val cfg = EngineConfig(
                     modelPath = modelFile.absolutePath,
                     backend = backendConfig,
-                    visionBackend = backendConfig, // GPU is passed if selected
+                    visionBackend = backendConfig,
                     cacheDir = context.cacheDir.absolutePath
                 )
 
@@ -90,6 +89,7 @@ class LlmVisionAnalyzer(private val context: Context) {
         bitmap: Bitmap,
         systemPrompt: String,
         userPrompt: String,
+        maxOutputTokens: Int = 280,
         imgMaxDim: Int = 512,
         onToken: (String) -> Unit,
         onDone: (String) -> Unit,
@@ -102,10 +102,14 @@ class LlmVisionAnalyzer(private val context: Context) {
             try {
                 val eng = engine ?: throw IllegalStateException("Engine null")
 
-                // OPTION 1A: Dropped native maxOutputTokens, relying on system prompt.
+                // SDK 0.10.0 Compatibility: Double types and no maxOutputTokens parameter
                 val conversation = eng.createConversation(
                     ConversationConfig(
-                        samplerConfig = SamplerConfig(topK = 40, topP = 0.95f, temperature = 0.4f),
+                        samplerConfig = SamplerConfig(
+                            topK = 40,
+                            topP = 0.95,
+                            temperature = 0.4
+                        ),
                         systemInstruction = Contents.of(systemPrompt)
                     )
                 )
@@ -115,12 +119,13 @@ class LlmVisionAnalyzer(private val context: Context) {
 
                 val sb = StringBuilder()
                 
-                // BUG 3 FIX: Catch JNI exceptions on the flow stream
+                // SDK 0.10.0 Compatibility: use message.toString()
                 conversation.sendMessageAsync(contents)
                     .catch { e -> withContext(Dispatchers.Main) { onError(e.message ?: "Stream error") } }
-                    .collect { message -> sb.append(message.text ?: "") }
+                    .collect { message -> 
+                        sb.append(message.toString()) 
+                    }
 
-                // BUG 8 FIX: Close conversation before dispatching onDone to avoid cancellation race
                 conversation.close()
                 withContext(Dispatchers.Main) { onDone(sb.toString().trim()) }
 
@@ -139,7 +144,7 @@ class LlmVisionAnalyzer(private val context: Context) {
             Bitmap.createScaledBitmap(this, (width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1), true)
         else this
         val bytes = ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
-        if (scaled !== this) scaled.recycle() // Recycle scaled copy
+        if (scaled !== this) scaled.recycle()
         return bytes
     }
 }
