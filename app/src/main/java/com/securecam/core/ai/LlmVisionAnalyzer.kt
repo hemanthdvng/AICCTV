@@ -70,8 +70,8 @@ class LlmVisionAnalyzer(private val context: Context) {
 
                 val cfg = EngineConfig(
                     modelPath = modelFile.absolutePath,
-                    backend = backendConfig,
-                    visionBackend = backendConfig,
+                    backend = backendConfig, // Main text inference can safely use GPU
+                    visionBackend = Backend.CPU(), // CRITICAL FIX: Vision backend MUST use CPU to prevent SIGSEGV crashes
                     cacheDir = context.cacheDir.absolutePath
                 )
 
@@ -102,7 +102,6 @@ class LlmVisionAnalyzer(private val context: Context) {
             try {
                 val eng = engine ?: throw IllegalStateException("Engine null")
 
-                // COMPILER FIX: Removed maxTokens parameter because SamplerConfig doesn't have it
                 val conversation = eng.createConversation(
                     ConversationConfig(
                         samplerConfig = SamplerConfig(
@@ -119,7 +118,6 @@ class LlmVisionAnalyzer(private val context: Context) {
 
                 val sb = StringBuilder()
                 
-                // COMPILER FIX: Manually enforce maxOutputTokens using Flow.take()
                 conversation.sendMessageAsync(contents)
                     .take(maxOutputTokens)
                     .collect { message ->
