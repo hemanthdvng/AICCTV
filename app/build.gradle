@@ -71,11 +71,11 @@ dependencies {
     implementation 'io.github.webrtc-sdk:android:104.5112.09'
     implementation 'com.google.code.gson:gson:2.10.1'
 
-    implementation('com.google.ai.edge.litertlm:litertlm-android:0.10.0') {
+    // PERF 14: Upgraded LiteRT-LM to 0.10.1 for Gemma 4 E2B support
+    implementation('com.google.ai.edge.litertlm:litertlm-android:0.10.1') {
         exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib'
     }
     
-    // ML Kit for Auto-Cropping
     implementation 'com.google.mlkit:face-detection:16.1.6'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3'
 }
