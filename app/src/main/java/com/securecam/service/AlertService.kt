@@ -11,7 +11,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import com.securecam.data.local.LogDao
+import com.securecam.data.local.LogDatabase
 import com.securecam.data.local.SecurityLogEntity
 import com.securecam.data.repository.EventRepository
 import dagger.hilt.android.AndroidEntryPoint
@@ -22,12 +22,11 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import javax.inject.Inject
+import androidx.room.Room
 
 @AndroidEntryPoint
 class AlertService : Service() {
     @Inject lateinit var eventRepository: EventRepository
-    @Inject lateinit var logDao: LogDao // BUG 7 FIX: Inject LogDao directly instead of building DB in a loop
-    
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var viewerSocket: Socket? = null
 
@@ -70,14 +69,16 @@ class AlertService : Service() {
                                 val type = object : TypeToken<List<SecurityLogEntity>>() {}.type
                                 val remoteLogs: List<SecurityLogEntity> = Gson().fromJson(json, type)
                                 
-                                val localLogs = logDao.getAllLogsSync()
+                                val db = Room.databaseBuilder(applicationContext, LogDatabase::class.java, "securecam_db").build()
+                                val localLogs = db.logDao().getAllLogsSync()
                                 val localIds = localLogs.map { it.logTime }.toSet()
                                 
                                 remoteLogs.forEach { log ->
                                     if (!localIds.contains(log.logTime)) {
-                                        logDao.insertLog(log)
+                                        db.logDao().insertLog(log)
                                     }
                                 }
+                                db.close()
                             }
                         }
                     } catch(e: Exception){}
@@ -108,13 +109,15 @@ class AlertService : Service() {
                                     val vidPath = map["videoPath"] as? String
                                     val isSafe = text.contains("Safe", ignoreCase = true) || text.contains("CLEAR", ignoreCase = true)
                                     
-                                    logDao.insertLog(SecurityLogEntity(
+                                    val db = Room.databaseBuilder(applicationContext, LogDatabase::class.java, "securecam_db").build()
+                                    db.logDao().insertLog(SecurityLogEntity(
                                         logTime = System.currentTimeMillis(),
                                         type = if(text.contains("Face")) "BIOMETRIC" else "LLM_INSIGHT",
                                         description = text,
                                         confidence = 1.0f,
                                         videoPath = vidPath
                                     ))
+                                    db.close()
 
                                     if (!isSafe && !text.contains("[SYSTEM]")) {
                                         showPopupNotification(text)
@@ -133,23 +136,27 @@ class AlertService : Service() {
         val prefs = getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("enable_notifications", true)) return
         
-        // BUG 11 FIX: Verify POST_NOTIFICATIONS permission before notifying to prevent SecurityException crash
+        // RESCUE PATCH: Prevent SecurityException from crashing the service entirely
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return
         }
         
-        val notif = NotificationCompat.Builder(this, "securecam_alerts")
-            .setContentTitle("🚨 Security Alert")
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .build()
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        
-        // BUG 10 FIX: Use mod to prevent Int cast overflow and negative ID errors
-        val safeId = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
-        manager.notify(safeId, notif)
+        try {
+            val notif = NotificationCompat.Builder(this, "securecam_alerts")
+                .setContentTitle("🚨 Security Alert")
+                .setContentText(text)
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            
+            // RESCUE PATCH: Modulo ensures ID is positive. Negative IDs are silently dropped by OnePlus/OxygenOS.
+            val safeId = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
+            manager.notify(safeId, notif)
+        } catch(e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun createNotificationChannel() {
