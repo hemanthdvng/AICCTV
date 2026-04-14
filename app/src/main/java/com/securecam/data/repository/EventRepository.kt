@@ -2,11 +2,10 @@ package com.securecam.data.repository
 
 import com.securecam.data.local.LogDao
 import com.securecam.data.local.SecurityLogEntity
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -20,7 +19,8 @@ class EventRepository @Inject constructor(private val logDao: LogDao) {
     suspend fun emitEvent(event: SecurityEvent) {
         _securityEvents.emit(event)
         if (!event.description.contains("[SYSTEM]", ignoreCase = true)) {
-            CoroutineScope(Dispatchers.IO).launch {
+            // BUG 6 FIX: Replaced scope leak with context switch to write to DB
+            withContext(Dispatchers.IO) {
                 try {
                     logDao.insertLog(
                         SecurityLogEntity(
