@@ -2,6 +2,7 @@ package com.securecam.core.ai
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.google.mlkit.vision.common.InputImage
@@ -35,6 +36,8 @@ class HybridAIPipeline @Inject constructor(
 
     val activeVideoPath = AtomicReference<String?>(null)
     val activeVideoEndTime = AtomicLong(0L)
+
+    private var lastLlmAnalysisTime = 0L
 
     private val prefs by lazy { context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE) }
     
@@ -129,17 +132,38 @@ class HybridAIPipeline @Inject constructor(
                 if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy.get()) {
                     bitmap.recycle(); return@launch
                 }
+
+                // PATCH: Safely handle both Float and Int types from SharedPreferences
+                val analysisIntervalSec = try {
+                    prefs.getFloat("llm_analysis_interval", 5f)
+                } catch (e: ClassCastException) {
+                    prefs.getInt("llm_analysis_interval", 5).toFloat()
+                }
+                
+                val analysisIntervalMs = (analysisIntervalSec * 1000).toLong()
+                val now = System.currentTimeMillis()
+
+                if (now - lastLlmAnalysisTime < analysisIntervalMs) {
+                    bitmap.recycle(); return@launch
+                }
+
+                lastLlmAnalysisTime = System.currentTimeMillis()
                 triggerLlmAnalysis(bitmap)
-            } catch (e: Throwable) { bitmap.recycle() }
+
+            } catch (e: Throwable) { 
+                Log.e("HybridAIPipeline", "Frame processing error", e)
+                bitmap.recycle() 
+            }
         }
     }
 
     private suspend fun triggerLlmAnalysis(bitmap: Bitmap) {
         isLlmBusy.set(true)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
-        val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
-        val llmResolution = prefs.getInt("llm_resolution", 280)
-        val aiImgResolution = prefs.getInt("ai_img_resolution", 512)
+        
+        val recordLenMs = try { prefs.getFloat("video_record_len", 15f).toLong() * 1000 } catch(e: Exception){ 15000L }
+        val llmResolution = try { prefs.getInt("llm_resolution", 280) } catch(e:Exception){ 280 }
+        val aiImgResolution = try { prefs.getInt("ai_img_resolution", 512) } catch(e:Exception){ 512 }
 
         try {
             val timedOut = withTimeoutOrNull(25000L) {
@@ -168,7 +192,6 @@ class HybridAIPipeline @Inject constructor(
                             if (continuation.isActive) continuation.resume(true)
                         },
                         onError = { err ->
-                            // Broadcasts errors instead of swallowing silently
                             if (!err.contains("busy")) aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "⚠️ [SYSTEM] LLM Error: $err", 1.0f)) }
                             if (continuation.isActive) continuation.resume(false)
                         }
