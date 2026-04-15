@@ -1,13 +1,15 @@
 package com.securecam.ui.screens
 
 import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
-import android.content.Intent
 import android.provider.Settings as AndroidSettings
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -34,6 +36,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -64,6 +67,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
     var isImporting by mutableStateOf(false)
         private set
     var currentModelName by mutableStateOf("None")
+    var currentDownloadId by mutableStateOf(-1L)
     var draftCroppedBitmap by mutableStateOf<Bitmap?>(null)
         private set
     var draftFaceName by mutableStateOf("")
@@ -105,12 +109,64 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
     fun downloadCloudModel(context: Context) {
         try {
             val url = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
-            val request = DownloadManager.Request(Uri.parse(url)).setTitle("Gemma AI Model").setDescription("Downloading SecureCam AI Engine...").setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED).setDestinationInExternalFilesDir(context, null, "gemma-4-E2B-it.litertlm")
-            (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            Toast.makeText(context, "Download started! Check your notification shade.", Toast.LENGTH_LONG).show()
-            context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit().putString("selected_model", "gemma-4-E2B-it.litertlm").apply()
-            currentModelName = "gemma-4-E2B-it.litertlm"
+            val request = DownloadManager.Request(Uri.parse(url))
+                .setTitle("Gemma AI Model")
+                .setDescription("Downloading SecureCam AI Engine...")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalFilesDir(context, null, "gemma-4-E2B-it.litertlm")
+            
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            currentDownloadId = downloadManager.enqueue(request)
+            Toast.makeText(context, "Download started! App will install it automatically when finished.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {}
+    }
+
+    fun processDownloadedModel(context: Context, downloadId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                val query = DownloadManager.Query().setFilterById(downloadId)
+                downloadManager.query(query).use { cursor ->
+                    if (cursor != null && cursor.moveToFirst()) {
+                        val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                            val localUriStr = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+                            if (localUriStr != null) {
+                                val sourceFile = File(Uri.parse(localUriStr).path!!)
+                                val destFile = File(context.filesDir, "gemma-4-E2B-it.litertlm")
+                                
+                                sourceFile.copyTo(destFile, overwrite = true)
+                                sourceFile.delete() // Cleanup external leak
+                                
+                                context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit().putString("selected_model", "gemma-4-E2B-it.litertlm").apply()
+                                withContext(Dispatchers.Main) {
+                                    currentModelName = "gemma-4-E2B-it.litertlm"
+                                    Toast.makeText(context, "Cloud Model Installed Successfully!", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {}
+        }
+    }
+
+    fun deleteModel(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
+                val modelName = prefs.getString("selected_model", "None")
+                if (modelName != null && modelName != "None") {
+                    val file = File(context.filesDir, modelName)
+                    if (file.exists()) file.delete()
+                }
+                prefs.edit().putString("selected_model", "None").apply()
+                withContext(Dispatchers.Main) {
+                    currentModelName = "None"
+                    Toast.makeText(context, "Model deleted successfully.", Toast.LENGTH_SHORT).show()
+                }
+            } catch(e: Exception){}
+        }
     }
 
     fun syncToCamera(context: Context, ip: String, token: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
@@ -199,7 +255,6 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     var fbApiKey by remember { mutableStateOf(prefs.getString("fb_api_key", "") ?: "") }
     var fbAppId by remember { mutableStateOf(prefs.getString("fb_app_id", "") ?: "") }
     
-    // CRITICAL FIX: Resolution Engines
     var cameraResolution by remember { mutableStateOf(prefs.getInt("camera_resolution", 1080)) }
     var camResExpanded by remember { mutableStateOf(false) }
     val camResOptions = listOf(1080, 720, 480, 320)
@@ -223,6 +278,22 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { viewModel.importModel(it, context) } }
 
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action == DownloadManager.ACTION_DOWNLOAD_COMPLETE) {
+                    val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+                    if (id == viewModel.currentDownloadId) {
+                        viewModel.processDownloadedModel(context, id)
+                    }
+                }
+            }
+        }
+        ContextCompat.registerReceiver(context, receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), ContextCompat.RECEIVER_EXPORTED)
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+
     LaunchedEffect(Unit) {
         viewModel.loadPrefs(context)
         try { androidx.core.content.ContextCompat.startForegroundService(context, android.content.Intent(context, com.securecam.service.AlertService::class.java)) } catch(e: Exception){}
@@ -293,7 +364,6 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
 
-            // CRITICAL FIX: Resolution UI Section
             Text("Camera & Video Quality", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(8.dp))
             Text("Higher camera resolution improves AI object detection significantly but uses more Wi-Fi bandwidth. The offline video resolution cannot exceed the live camera resolution.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
@@ -378,13 +448,18 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             
             if (appRole == "Camera") {
                 Text("Local LLM Model", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Current model loaded: ${viewModel.currentModelName}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-            Spacer(modifier = Modifier.height(12.dp))
-            Button(onClick = { filePicker.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth(), enabled = !viewModel.isImporting, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)) { Text("📁 Import Model from Device (.litertlm)") }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(onClick = { viewModel.downloadCloudModel(context) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))) { Text("☁️ Download AI Model") }
-            Spacer(modifier = Modifier.height(48.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Current model loaded: ${viewModel.currentModelName}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(onClick = { filePicker.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth(), enabled = !viewModel.isImporting, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)) { Text("📁 Import Model from Device (.litertlm)") }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = { viewModel.downloadCloudModel(context) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))) { Text("☁️ Download AI Model") }
+                
+                if (viewModel.currentModelName != "None") {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(onClick = { viewModel.deleteModel(context) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))) { Text("🗑️ Delete Current Model") }
+                }
+                Spacer(modifier = Modifier.height(48.dp))
             }
         }
     }
