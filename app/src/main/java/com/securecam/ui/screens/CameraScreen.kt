@@ -122,8 +122,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
         var isCurrentlyRecording by remember { mutableStateOf(false) }
         var isSavingVideo by remember { mutableStateOf(false) }
 
-        // FIX #12: Intercept back button so app returns to main screen
-        // instead of exiting. WatchTowerService keeps the process alive.
         BackHandler {
             navController.navigate("main") {
                 popUpTo("main") { inclusive = true }
@@ -165,13 +163,55 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
             } else { tts?.stop() }
         }
 
-        // FIX #1: Register the frame listener EXACTLY ONCE using DisposableEffect.
-        // The previous pattern (while(isActive) { addFrameListener(...); delay(200) })
-        // registered a NEW listener every 200ms without removing the old ones.
-        // After 5 minutes this created 1,500 active listeners all receiving every frame,
-        // all copying bitmaps, all calling MJPEG/DVR writes — saturating the CPU
-        // and making AI analysis appear extremely slow.
-        DisposableEffect(localRenderer) {
+        LaunchedEffect(forceScanTrigger, scanIntervalMs) {
+            while (isActive) {
+                delay(if (forceScanTrigger > 0) 500 else scanIntervalMs)
+                while (viewModel.aiPipeline.isBusy() && isActive) { delay(100) }
+                latestBitmapRef.getAndSet(null)?.let { bmp ->
+                    if (!bmp.isRecycled) {
+                        try { val copy = bmp.copy(Bitmap.Config.ARGB_8888, false); if (copy != null) { viewModel.aiPipeline.processFrame(copy) } } catch (e: Exception) {}
+                        bmp.recycle()
+                    }
+                }
+                if (forceScanTrigger > 0) forceScanTrigger = 0
+            }
+        }
+
+        LaunchedEffect(Unit) {
+            viewModel.eventRepository.securityEvents.collect { event ->
+                val text = event.description
+                val vidPath = event.videoPath
+                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                alertHistory.add(0, "[$timeStr] $text")
+                if (alertHistory.size > 50) alertHistory.removeLast()
+                localServer.broadcast(Gson().toJson(mapOf("type" to "ALERT", "text" to text, "videoPath" to vidPath)))
+                dataChannel?.let { dc ->
+                    if (dc.state() == DataChannel.State.OPEN) {
+                        val buffer = ByteBuffer.wrap(text.toByteArray(Charsets.UTF_8))
+                        dc.send(DataChannel.Buffer(buffer, false))
+                    }
+                }
+            }
+        }
+
+        DisposableEffect(Unit) {
+            val watchTowerIntent = Intent(context, WatchTowerService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(watchTowerIntent)
+                } else {
+                    context.startService(watchTowerIntent)
+                }
+            } catch (e: Exception) {}
+
+            viewModel.aiPipeline.start()
+            mjpegServer.start(8080, securityToken)
+            try { apiServer.start() } catch (e: Exception) {}
+
+            val rtcManager = WebRTCManager(context).apply { initRenderer(localRenderer) }
+            
+            // FIX: The Frame Listener is now attached strictly AFTER the renderer is initialized. 
+            // This prevents EglRenderer from throwing a swallowed IllegalStateException and starvation.
             val frameListener = org.webrtc.EglRenderer.FrameListener { bitmap ->
                 try {
                     val bmpCopy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
@@ -216,59 +256,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 } catch (e: Exception) {}
             }
             try { localRenderer.addFrameListener(frameListener, 1.0f) } catch (e: Exception) {}
-            onDispose { try { localRenderer.removeFrameListener(frameListener) } catch (e: Exception) {} }
-        }
 
-        LaunchedEffect(forceScanTrigger, scanIntervalMs) {
-            while (isActive) {
-                delay(if (forceScanTrigger > 0) 500 else scanIntervalMs)
-                // Wait if AI is still processing the previous frame before sending another
-                while (viewModel.aiPipeline.isBusy() && isActive) { delay(100) }
-                latestBitmapRef.getAndSet(null)?.let { bmp ->
-                    if (!bmp.isRecycled) {
-                        try { val copy = bmp.copy(Bitmap.Config.ARGB_8888, false); if (copy != null) { viewModel.aiPipeline.processFrame(copy) } } catch (e: Exception) {}
-                        bmp.recycle()
-                    }
-                }
-                if (forceScanTrigger > 0) forceScanTrigger = 0
-            }
-        }
-
-        LaunchedEffect(Unit) {
-            viewModel.eventRepository.securityEvents.collect { event ->
-                val text = event.description
-                val vidPath = event.videoPath
-                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-                alertHistory.add(0, "[$timeStr] $text")
-                if (alertHistory.size > 50) alertHistory.removeLast()
-                localServer.broadcast(Gson().toJson(mapOf("type" to "ALERT", "text" to text, "videoPath" to vidPath)))
-                dataChannel?.let { dc ->
-                    if (dc.state() == DataChannel.State.OPEN) {
-                        val buffer = ByteBuffer.wrap(text.toByteArray(Charsets.UTF_8))
-                        dc.send(DataChannel.Buffer(buffer, false))
-                    }
-                }
-            }
-        }
-
-        DisposableEffect(Unit) {
-            // FIX #12: Start WatchTowerService as a foreground service when camera is active.
-            // This keeps the process alive when the user presses HOME, prevents Android
-            // from killing the app, and shows a persistent notification.
-            val watchTowerIntent = Intent(context, WatchTowerService::class.java)
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(watchTowerIntent)
-                } else {
-                    context.startService(watchTowerIntent)
-                }
-            } catch (e: Exception) {}
-
-            viewModel.aiPipeline.start()
-            mjpegServer.start(8080, securityToken)
-            try { apiServer.start() } catch (e: Exception) {}
-
-            val rtcManager = WebRTCManager(context).apply { initRenderer(localRenderer) }
             val fbUrl = prefs.getString("fb_db_url", "") ?: ""
             var firebaseClient: FirebaseSignalingClient? = null
             if (fbUrl.isNotBlank()) {
@@ -382,6 +370,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
             }
 
             onDispose {
+                try { localRenderer.removeFrameListener(frameListener) } catch (e: Exception) {}
                 try { localRenderer.release() } catch (e: Exception) {}
                 isScreaming = false
                 isFlashActive = false
