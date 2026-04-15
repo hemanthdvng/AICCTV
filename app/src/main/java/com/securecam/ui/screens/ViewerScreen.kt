@@ -86,7 +86,7 @@ fun ViewerScreen(navController: NavController, viewModel: ViewerViewModel = hilt
                 if (event.description != lastAlert || now - lastTime > 2000) {
                     lastAlert = event.description
                     lastTime = now
-                    val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                    val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(event.timestamp))
                     alertHistory.add(0, "[$timeStr] ${event.description}")
                     if (alertHistory.size > 50) alertHistory.removeLast()
                 }
@@ -128,9 +128,19 @@ fun ViewerScreen(navController: NavController, viewModel: ViewerViewModel = hilt
                             buffer?.data?.let { byteBuffer ->
                                 val bytes = ByteArray(byteBuffer.remaining())
                                 byteBuffer.get(bytes)
-                                val text = String(bytes, Charsets.UTF_8)
+                                val raw = String(bytes, Charsets.UTF_8)
                                 CoroutineScope(Dispatchers.Main).launch {
-                                    viewModel.eventRepository.emitEvent(SecurityEvent("WEBRTC", text, 1.0f))
+                                    try {
+                                        val map = Gson().fromJson(raw, Map::class.java)
+                                        if (map["type"] == "ALERT") {
+                                            val text = map["text"] as? String ?: ""
+                                            val vidPath = map["videoPath"] as? String
+                                            val exactTime = (map["timestamp"] as? Double)?.toLong() ?: System.currentTimeMillis()
+                                            viewModel.eventRepository.emitEvent(SecurityEvent("WEBRTC", text, 1.0f, vidPath, exactTime))
+                                        }
+                                    } catch (e: Exception) {
+                                        viewModel.eventRepository.emitEvent(SecurityEvent("WEBRTC", raw, 1.0f))
+                                    }
                                 }
                             }
                         }
@@ -178,8 +188,10 @@ fun ViewerScreen(navController: NavController, viewModel: ViewerViewModel = hilt
                         "ICE" -> peerConnection?.addIceCandidate(IceCandidate(map["sdpMid"] as String, (map["sdpMLineIndex"] as Double).toInt(), map["sdp"] as String))
                         "ALERT" -> {
                             val text = map["text"] as? String ?: ""
+                            val vidPath = map["videoPath"] as? String
+                            val exactTime = (map["timestamp"] as? Double)?.toLong() ?: System.currentTimeMillis()
                             CoroutineScope(Dispatchers.IO).launch {
-                                viewModel.eventRepository.emitEvent(SecurityEvent("TCP_ALERT", text, 1.0f))
+                                viewModel.eventRepository.emitEvent(SecurityEvent("TCP_ALERT", text, 1.0f, vidPath, exactTime))
                             }
                         }
                     }
@@ -197,7 +209,6 @@ fun ViewerScreen(navController: NavController, viewModel: ViewerViewModel = hilt
 
             onDispose {
                 try { remoteRenderer.release() } catch(e: Exception){}
-                // CRITICAL FIX: Gracefully disconnect and drop ghost WebRTC sockets so buttons work after reopening
                 if (viewerMode == "Local WiFi") {
                     localClient?.send(Gson().toJson(mapOf("type" to "DISCONNECT")))
                 }
@@ -219,7 +230,6 @@ fun ViewerScreen(navController: NavController, viewModel: ViewerViewModel = hilt
                     Spacer(modifier = Modifier.height(16.dp))
                     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         items(alertHistory) { alert ->
-                            // CRITICAL FIX: Safe UI colors match the Camera screen to prevent false red alarms
                             val isSafe = alert.contains("Safe", ignoreCase = true) || alert.contains("CLEAR", ignoreCase = true) || alert.contains("Authorized Face")
                             val isSystem = alert.contains("[SYSTEM]")
                             val bgColor = if (isSystem) Color(0x991976D2) else if (isSafe) Color(0x884CAF50) else Color(0xCCD32F2F)
