@@ -111,7 +111,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
             val url = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
             val request = DownloadManager.Request(Uri.parse(url))
                 .setTitle("Gemma AI Model")
-                .setDescription("Downloading SecureCam AI Engine...")
+                .setDescription("Downloading AI CCTV Engine...")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalFilesDir(context, null, "gemma-4-E2B-it.litertlm")
             
@@ -395,7 +395,7 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
 
             Text("Local Biometric Vault", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(8.dp))
-            Text("Upload a photo. The AI will auto-crop the face. Faces are NOT synced remotely.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            Text("Upload a photo. The AI will auto-crop the face. Authorized faces are automatically synced to the Camera when you push settings.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             Spacer(modifier = Modifier.height(12.dp))
             Button(onClick = { photoPicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) { Text("📸 Upload Face Photo") }
             if (faces.isNotEmpty()) {
