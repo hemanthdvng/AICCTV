@@ -45,12 +45,14 @@ class DvrEngine(private val context: Context) {
     fun appendFrame(bitmap: Bitmap) {
         if (!isRecording || surface == null) return
         try {
-            // CRITICAL FIX: lockHardwareCanvas() enables native OS surface rendering, fixing the 0-byte blank video bug
+            // CRITICAL FIX: safely unwrap hardware canvas to prevent crash if native encoder is temporarily busy
             val canvas = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) surface?.lockHardwareCanvas() else surface?.lockCanvas(null)
-            canvas?.drawBitmap(bitmap, 0f, 0f, null)
-            surface?.unlockCanvasAndPost(canvas!!)
-            drainCodec(false)
-            frameCount++
+            if (canvas != null) {
+                canvas.drawBitmap(bitmap, 0f, 0f, null)
+                surface?.unlockCanvasAndPost(canvas)
+                drainCodec(false)
+                frameCount++
+            }
         } catch (e: Exception) {}
     }
 
