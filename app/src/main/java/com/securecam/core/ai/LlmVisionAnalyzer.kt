@@ -77,8 +77,26 @@ class LlmVisionAnalyzer(private val context: Context) {
                 engine = Engine(cfg).also { it.initialize() }
                 initialized.set(true)
                 withContext(Dispatchers.Main) { onResult(InitResult.Success) }
+                
             } catch (e: Throwable) {
-                withContext(Dispatchers.Main) { onResult(InitResult.Error("Init failed ($backendType): ${e.message}")) }
+                // FIX: Gracefully fallback to CPU if GPU OpenCL drivers are missing
+                if (backendType == "GPU") {
+                    try {
+                        val cpuCfg = EngineConfig(
+                            modelPath = modelFile.absolutePath,
+                            backend = Backend.CPU(),
+                            visionBackend = Backend.CPU(),
+                            cacheDir = context.cacheDir.absolutePath
+                        )
+                        engine = Engine(cpuCfg).also { it.initialize() }
+                        initialized.set(true)
+                        withContext(Dispatchers.Main) { onResult(InitResult.Error("GPU OpenCL missing or incompatible. Successfully fell back to CPU: ${e.message}")) }
+                    } catch (e2: Throwable) {
+                        withContext(Dispatchers.Main) { onResult(InitResult.Error("Init failed (CPU Fallback): ${e2.message}")) }
+                    }
+                } else {
+                    withContext(Dispatchers.Main) { onResult(InitResult.Error("Init failed ($backendType): ${e.message}")) }
+                }
             }
         }
     }
@@ -111,7 +129,6 @@ class LlmVisionAnalyzer(private val context: Context) {
                     )
                 )
 
-                // FIX: LiteRT v0.10.0 Syntax 
                 val imageBytes = bitmap.toJpegBytes(maxDim = imgMaxDim)
                 val contents = Contents.of(listOf(Content.ImageBytes(imageBytes), Content.Text(userPrompt)))
 
