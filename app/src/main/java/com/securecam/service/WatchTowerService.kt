@@ -25,8 +25,6 @@ class WatchTowerService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        
-        // CRITICAL FIX: Graceful fallback for API levels that don't support CAMERA foreground type
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 startForeground(NOTIFICATION_ID, createNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
@@ -40,14 +38,14 @@ class WatchTowerService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        return START_STICKY 
+        return START_STICKY
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val serviceChannel = NotificationChannel(
                 CHANNEL_ID,
-                "WatchTower Security AI",
+                "AI CCTV WatchTower",
                 NotificationManager.IMPORTANCE_LOW
             )
             val manager = getSystemService(NotificationManager::class.java)
@@ -57,13 +55,13 @@ class WatchTowerService : LifecycleService() {
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SecureCam WatchTower Active")
-            .setContentText("Camera, Networking, and AI logic are locked to memory.")
+            .setContentTitle("AI CCTV Active")
+            .setContentText("Camera stream, AI analysis, and networking are running.")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .build()
     }
-    
+
     override fun onDestroy() {
         super.onDestroy()
         stopForeground(true)
