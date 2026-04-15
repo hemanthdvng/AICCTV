@@ -10,7 +10,8 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Singleton
 
-@Entity(tableName = "security_logs")
+// CRITICAL FIX: Unique index prevents TCP push and HTTP pull from duplicating rows
+@Entity(tableName = "security_logs", indices = [Index(value = ["logTime"], unique = true)])
 data class SecurityLogEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val logTime: Long,
@@ -40,7 +41,6 @@ abstract class LogDatabase : RoomDatabase() {
     abstract fun logDao(): LogDao
 }
 
-// CRITICAL FIX: The missing Hilt Dependency Injection module
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
