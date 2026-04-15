@@ -38,6 +38,8 @@ class HybridAIPipeline @Inject constructor(
     val activeVideoEndTime = AtomicLong(0L)
 
     private var lastLlmAnalysisTime = 0L
+    private var firstFrameLogged = false
+    private var firstSubmissionLogged = false
 
     private val prefs by lazy { context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE) }
     
@@ -50,6 +52,7 @@ class HybridAIPipeline @Inject constructor(
 
     fun start() {
         if (isStarted.getAndSet(true)) return 
+        Log.d("AILOGS", "Starting HybridAIPipeline")
         
         llmAnalyzer.initialize { result ->
             when (result) {
@@ -58,6 +61,7 @@ class HybridAIPipeline @Inject constructor(
                 is LlmVisionAnalyzer.InitResult.Error -> 
                     aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "[SYSTEM] LLM init failed: ${result.message}", 1.0f)) }
                 LlmVisionAnalyzer.InitResult.Success -> { 
+                    Log.d("AILOGS", "LLM Engine Online.")
                     aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "[SYSTEM] LLM Engine Online and Ready.", 1.0f)) }
                 }
             }
@@ -66,24 +70,36 @@ class HybridAIPipeline @Inject constructor(
     }
 
     fun stop() {
+        Log.d("AILOGS", "Stopping HybridAIPipeline")
         llmAnalyzer.close()
         try { biometricEngine.close() } catch (e: Exception) {}
         try { faceDetector.close() } catch (e: Exception) {}
         isLlmBusy.set(false)
         isStarted.set(false)
+        firstFrameLogged = false
+        firstSubmissionLogged = false
     }
 
     fun isBusy(): Boolean = isLlmBusy.get()
 
     fun processFrame(bitmap: Bitmap) {
+        if (!firstFrameLogged) {
+            firstFrameLogged = true
+            aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "[SYSTEM] DIAGNOSTIC: Pipeline is actively receiving frames from Camera.", 1.0f)) }
+        }
+        
+        Log.d("AILOGS", "processFrame invoked. LLM Busy = ${isLlmBusy.get()}")
+
         aiScope.launch {
             try {
                 var skipLlm = false
 
                 if (prefs.getBoolean("face_recog_enabled", false)) {
+                    Log.d("AILOGS", "Executing Face Detection await...")
                     try {
                         val inputImage = InputImage.fromBitmap(bitmap, 0)
                         val facesList = faceDetector.process(inputImage).await()
+                        Log.d("AILOGS", "Face Detection finished. Found: ${facesList.size}")
 
                         if (facesList.isNotEmpty()) {
                             val json = prefs.getString("authorized_faces", "[]") ?: "[]"
@@ -126,14 +142,15 @@ class HybridAIPipeline @Inject constructor(
                                 }
                             }
                         }
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) { Log.e("AILOGS", "Face detection crashed", e) }
                 }
 
-                if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy.get()) {
+                val llmEnabled = prefs.getBoolean("llm_enabled", true)
+                if (skipLlm || !llmEnabled || isLlmBusy.get()) {
+                    Log.d("AILOGS", "Dropping frame. skipLlm=$skipLlm, enabled=$llmEnabled, busy=${isLlmBusy.get()}")
                     bitmap.recycle(); return@launch
                 }
 
-                // PATCH: Safely handle both Float and Int types from SharedPreferences
                 val analysisIntervalSec = try {
                     prefs.getFloat("llm_analysis_interval", 5f)
                 } catch (e: ClassCastException) {
@@ -142,16 +159,24 @@ class HybridAIPipeline @Inject constructor(
                 
                 val analysisIntervalMs = (analysisIntervalSec * 1000).toLong()
                 val now = System.currentTimeMillis()
+                val timeSinceLast = now - lastLlmAnalysisTime
 
-                if (now - lastLlmAnalysisTime < analysisIntervalMs) {
+                if (timeSinceLast < analysisIntervalMs) {
+                    Log.d("AILOGS", "Dropping frame for interval. Wait: $timeSinceLast / $analysisIntervalMs")
                     bitmap.recycle(); return@launch
+                }
+
+                Log.d("AILOGS", "FRAME ACCEPTED. Triggering LLM.")
+                if (!firstSubmissionLogged) {
+                    firstSubmissionLogged = true
+                    aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "[SYSTEM] DIAGNOSTIC: Submitting first image to LLM engine.", 1.0f)) }
                 }
 
                 lastLlmAnalysisTime = System.currentTimeMillis()
                 triggerLlmAnalysis(bitmap)
 
             } catch (e: Throwable) { 
-                Log.e("HybridAIPipeline", "Frame processing error", e)
+                Log.e("AILOGS", "Frame processing error", e)
                 bitmap.recycle() 
             }
         }
@@ -169,6 +194,7 @@ class HybridAIPipeline @Inject constructor(
             val timedOut = withTimeoutOrNull(25000L) {
                 suspendCancellableCoroutine<Boolean> { continuation ->
                     val sysPrompt = "You are a concise security camera AI. Analyze the image and respond in $llmResolution tokens or fewer."
+                    Log.d("AILOGS", "llmAnalyzer.analyze() called. Awaiting callback...")
                     llmAnalyzer.analyze(
                         bitmap = bitmap,
                         systemPrompt = sysPrompt,
@@ -176,6 +202,7 @@ class HybridAIPipeline @Inject constructor(
                         imgMaxDim = aiImgResolution,
                         onToken = { },
                         onDone = { text ->
+                            Log.d("AILOGS", "LLM Response Received: $text")
                             val output = text.trim()
                             val isSafe = output.contains("CLEAR", ignoreCase = true) || output.isEmpty()
                             aiScope.launch {
@@ -192,6 +219,7 @@ class HybridAIPipeline @Inject constructor(
                             if (continuation.isActive) continuation.resume(true)
                         },
                         onError = { err ->
+                            Log.e("AILOGS", "LLM Native Error: $err")
                             if (!err.contains("busy")) aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "⚠️ [SYSTEM] LLM Error: $err", 1.0f)) }
                             if (continuation.isActive) continuation.resume(false)
                         }
@@ -199,10 +227,12 @@ class HybridAIPipeline @Inject constructor(
                 }
             }
             if (timedOut == null) {
+                Log.e("AILOGS", "LLM INFERENCE TIMED OUT AFTER 25s")
                 aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "⚠️ [SYSTEM] Inference Timed Out (25s). Restarting native engine...", 1.0f)) }
                 llmAnalyzer.cancelCurrentInference()
             }
         } finally {
+            Log.d("AILOGS", "Releasing isLlmBusy lock.")
             isLlmBusy.set(false)
             if (!bitmap.isRecycled) bitmap.recycle()
         }
