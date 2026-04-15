@@ -149,56 +149,60 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
         }
 
         LaunchedEffect(Unit) {
-            while(isActive) {
-                try {
-                    // CRITICAL FIX: Changed 0.5f to 1.0f to pass raw uncompressed 1080p frame directly to AI and Recording Engine
-                    localRenderer.addFrameListener({ bitmap ->
-                        try {
-                            val bmpCopy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-                            if (bmpCopy != null) { 
-                                mjpegServer.updateFrame(bmpCopy)
+            var lastFrameTime = 0L
+            try {
+                // CRITICAL FIX: Changed 0.5f to 1.0f to pass raw uncompressed 1080p frame directly to AI and Recording Engine
+                localRenderer.addFrameListener({ bitmap ->
+                    val currentFrameTime = System.currentTimeMillis()
+                    if (currentFrameTime - lastFrameTime < 200) {
+                        return@addFrameListener
+                    }
+                    lastFrameTime = currentFrameTime
 
-                                val now = System.currentTimeMillis()
-                                val endTime = HybridAIPipeline.activeVideoEndTime
+                    try {
+                        val bmpCopy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                        if (bmpCopy != null) { 
+                            mjpegServer.updateFrame(bmpCopy)
 
-                                if (now < endTime && HybridAIPipeline.activeVideoPath != null) {
-                                    val vidRes = prefs.getInt("video_resolution", 720)
-                                    val scaledBmp = if (bmpCopy.height > vidRes) {
-                                        val ratio = bmpCopy.width.toFloat() / bmpCopy.height.toFloat()
-                                        Bitmap.createScaledBitmap(bmpCopy, (vidRes * ratio).toInt(), vidRes, true)
-                                    } else bmpCopy
+                            val now = System.currentTimeMillis()
+                            val endTime = HybridAIPipeline.activeVideoEndTime
 
-                                    if (!isCurrentlyRecording) {
-                                        isCurrentlyRecording = true
-                                        isSavingVideo = false
-                                        try {
-                                            // MediaCodec requires width/height to be even numbers
-                                            val w = scaledBmp.width - (scaledBmp.width % 16)
-                                            val h = scaledBmp.height - (scaledBmp.height % 16)
-                                            dvrEngine.triggerRecording(HybridAIPipeline.activeVideoPath ?: "alert_${now}.mp4", w, h) 
-                                        } catch(e: Exception){}
-                                    }
-                                    
-                                    try { dvrEngine.appendFrame(scaledBmp) } catch(e: Exception){}
-                                    if (scaledBmp != bmpCopy) scaledBmp.recycle()
+                            if (now < endTime && HybridAIPipeline.activeVideoPath != null) {
+                                val vidRes = prefs.getInt("video_resolution", 720)
+                                val scaledBmp = if (bmpCopy.height > vidRes) {
+                                    val ratio = bmpCopy.width.toFloat() / bmpCopy.height.toFloat()
+                                    Bitmap.createScaledBitmap(bmpCopy, (vidRes * ratio).toInt(), vidRes, true)
+                                } else bmpCopy
 
-                                } else {
-                                    if (isCurrentlyRecording) {
-                                        isCurrentlyRecording = false
-                                        isSavingVideo = true
-                                        try { dvrEngine.stopRecording() } catch(e: Exception){}
-                                        CoroutineScope(Dispatchers.Main).launch { delay(3000); isSavingVideo = false }
-                                    }
+                                if (!isCurrentlyRecording) {
+                                    isCurrentlyRecording = true
+                                    isSavingVideo = false
+                                    try {
+                                        // MediaCodec requires width/height to be even numbers
+                                        val w = scaledBmp.width - (scaledBmp.width % 16)
+                                        val h = scaledBmp.height - (scaledBmp.height % 16)
+                                        dvrEngine.triggerRecording(HybridAIPipeline.activeVideoPath ?: "alert_${now}.mp4", w, h) 
+                                    } catch(e: Exception){}
                                 }
+                                
+                                try { dvrEngine.appendFrame(scaledBmp) } catch(e: Exception){}
+                                if (scaledBmp != bmpCopy) scaledBmp.recycle()
 
-                                val old = latestBitmapRef.getAndSet(bmpCopy)
-                                old?.recycle() 
+                            } else {
+                                if (isCurrentlyRecording) {
+                                    isCurrentlyRecording = false
+                                    isSavingVideo = true
+                                    try { dvrEngine.stopRecording() } catch(e: Exception){}
+                                    CoroutineScope(Dispatchers.Main).launch { delay(3000); isSavingVideo = false }
+                                }
                             }
-                        } catch(e: Exception) {}
-                    }, 1.0f)
-                } catch(e: Exception) {}
-                delay(200) 
-            }
+
+                            val old = latestBitmapRef.getAndSet(bmpCopy)
+                            old?.recycle() 
+                        }
+                    } catch(e: Exception) {}
+                }, 1.0f)
+            } catch(e: Exception) {}
         }
 
         LaunchedEffect(forceScanTrigger, scanIntervalMs) {
