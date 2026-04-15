@@ -101,8 +101,11 @@ class AlertService : Service() {
                                     val vidPath = map["videoPath"] as? String
                                     val isSafe = text.contains("Safe", ignoreCase = true) || text.contains("CLEAR", ignoreCase = true)
                                     
+                                    // CRITICAL FIX: Extract original Camera timestamp to sync identical deduplication keys
+                                    val exactTime = (map["timestamp"] as? Double)?.toLong() ?: System.currentTimeMillis()
+                                    
                                     eventRepository.saveLog(SecurityLogEntity(
-                                        logTime = System.currentTimeMillis(),
+                                        logTime = exactTime,
                                         type = if(text.contains("Face")) "BIOMETRIC" else "LLM_INSIGHT",
                                         description = text,
                                         confidence = 1.0f,
