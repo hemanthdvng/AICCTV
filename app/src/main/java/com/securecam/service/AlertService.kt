@@ -3,6 +3,7 @@ package com.securecam.service
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -34,7 +35,16 @@ class AlertService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(1, buildNotification("SecureCam Background Service Active"))
+        
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(1, buildNotification("SecureCam Background Service Active"), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(1, buildNotification("SecureCam Background Service Active"))
+            }
+        } catch (e: Exception) {
+            startForeground(1, buildNotification("SecureCam Background Service Active"))
+        }
         
         val prefs = getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
 
