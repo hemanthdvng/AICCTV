@@ -73,25 +73,30 @@ class BiometricEngine(private val context: Context) {
         val swBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true) ?: bitmap
         val scaledBitmap = Bitmap.createScaledBitmap(swBitmap, IMAGE_SIZE, IMAGE_SIZE, false)
         
-        val byteBuffer = ByteBuffer.allocateDirect(4 * IMAGE_SIZE * IMAGE_SIZE * 3)
-        byteBuffer.order(ByteOrder.nativeOrder())
-        
-        val intValues = IntArray(IMAGE_SIZE * IMAGE_SIZE)
-        scaledBitmap.getPixels(intValues, 0, scaledBitmap.width, 0, 0, scaledBitmap.width, scaledBitmap.height)
-        
-        var pixel = 0
-        for (i in 0 until IMAGE_SIZE) {
-            for (j in 0 until IMAGE_SIZE) {
-                val `val` = intValues[pixel++]
-                byteBuffer.putFloat((((`val` shr 16) and 0xFF) - 127.5f) / 128.0f)
-                byteBuffer.putFloat((((`val` shr 8) and 0xFF) - 127.5f) / 128.0f)
-                byteBuffer.putFloat(((`val` and 0xFF) - 127.5f) / 128.0f)
+        try {
+            val byteBuffer = ByteBuffer.allocateDirect(4 * IMAGE_SIZE * IMAGE_SIZE * 3)
+            byteBuffer.order(ByteOrder.nativeOrder())
+            
+            val intValues = IntArray(IMAGE_SIZE * IMAGE_SIZE)
+            scaledBitmap.getPixels(intValues, 0, scaledBitmap.width, 0, 0, scaledBitmap.width, scaledBitmap.height)
+            
+            var pixel = 0
+            for (i in 0 until IMAGE_SIZE) {
+                for (j in 0 until IMAGE_SIZE) {
+                    val `val` = intValues[pixel++]
+                    byteBuffer.putFloat((((`val` shr 16) and 0xFF) - 127.5f) / 128.0f)
+                    byteBuffer.putFloat((((`val` shr 8) and 0xFF) - 127.5f) / 128.0f)
+                    byteBuffer.putFloat(((`val` and 0xFF) - 127.5f) / 128.0f)
+                }
             }
+            
+            val output = Array(1) { FloatArray(EMBEDDING_SIZE) }
+            interpreter?.run(byteBuffer, output)
+            return@withContext output[0]
+        } finally {
+            if (swBitmap != bitmap && !swBitmap.isRecycled) swBitmap.recycle()
+            if (!scaledBitmap.isRecycled) scaledBitmap.recycle()
         }
-        
-        val output = Array(1) { FloatArray(EMBEDDING_SIZE) }
-        interpreter?.run(byteBuffer, output)
-        return@withContext output[0]
     }
 
     fun calculateCosineSimilarity(emb1: FloatArray, emb2: FloatArray): Float {
