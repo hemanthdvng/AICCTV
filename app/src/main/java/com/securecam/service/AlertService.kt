@@ -8,7 +8,6 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import com.securecam.data.local.LogDatabase
 import com.securecam.data.local.SecurityLogEntity
 import com.securecam.data.repository.EventRepository
 import dagger.hilt.android.AndroidEntryPoint
@@ -19,7 +18,6 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import javax.inject.Inject
-import androidx.room.Room
 
 @AndroidEntryPoint
 class AlertService : Service() {
@@ -66,16 +64,13 @@ class AlertService : Service() {
                                 val type = object : TypeToken<List<SecurityLogEntity>>() {}.type
                                 val remoteLogs: List<SecurityLogEntity> = Gson().fromJson(json, type)
                                 
-                                val db = Room.databaseBuilder(applicationContext, LogDatabase::class.java, "securecam_db").build()
-                                val localLogs = db.logDao().getAllLogsSync()
-                                val localIds = localLogs.map { it.logTime }.toSet()
+                                val localIds = eventRepository.getLocalLogIds()
                                 
                                 remoteLogs.forEach { log ->
                                     if (!localIds.contains(log.logTime)) {
-                                        db.logDao().insertLog(log)
+                                        eventRepository.saveLog(log)
                                     }
                                 }
-                                db.close()
                             }
                         }
                     } catch(e: Exception){}
@@ -94,7 +89,6 @@ class AlertService : Service() {
                         if (ip.isNotBlank()) {
                             viewerSocket = Socket(ip, 8081)
                             
-                            // CRITICAL FIX: Authenticate TCP socket with password!
                             val out = java.io.PrintWriter(viewerSocket!!.getOutputStream(), true)
                             out.println(token)
                             
@@ -107,15 +101,13 @@ class AlertService : Service() {
                                     val vidPath = map["videoPath"] as? String
                                     val isSafe = text.contains("Safe", ignoreCase = true) || text.contains("CLEAR", ignoreCase = true)
                                     
-                                    val db = Room.databaseBuilder(applicationContext, LogDatabase::class.java, "securecam_db").build()
-                                    db.logDao().insertLog(SecurityLogEntity(
+                                    eventRepository.saveLog(SecurityLogEntity(
                                         logTime = System.currentTimeMillis(),
                                         type = if(text.contains("Face")) "BIOMETRIC" else "LLM_INSIGHT",
                                         description = text,
                                         confidence = 1.0f,
                                         videoPath = vidPath
                                     ))
-                                    db.close()
 
                                     if (!isSafe && !text.contains("[SYSTEM]")) {
                                         showPopupNotification(text)
