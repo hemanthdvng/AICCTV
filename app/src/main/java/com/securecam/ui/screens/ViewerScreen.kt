@@ -2,6 +2,8 @@ package com.securecam.ui.screens
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -59,8 +61,21 @@ fun ViewerScreen(navController: NavController, viewModel: ViewerViewModel = hilt
     val context = LocalContext.current
     
     var hasMicPerm by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) }
-    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasMicPerm = it }
-    LaunchedEffect(Unit) { if (!hasMicPerm) permLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+    var hasNotifPerm by remember { mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) }
+
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
+        hasMicPerm = perms[Manifest.permission.RECORD_AUDIO] ?: hasMicPerm
+        if (Build.VERSION.SDK_INT >= 33) {
+            hasNotifPerm = perms[Manifest.permission.POST_NOTIFICATIONS] ?: hasNotifPerm
+        }
+    }
+
+    LaunchedEffect(Unit) { 
+        val reqs = mutableListOf<String>()
+        if (!hasMicPerm) reqs.add(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 33 && !hasNotifPerm) reqs.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (reqs.isNotEmpty()) permLauncher.launch(reqs.toTypedArray())
+    }
 
     if (hasMicPerm) {
         val remoteRenderer = remember { SurfaceViewRenderer(context) }
@@ -103,6 +118,16 @@ fun ViewerScreen(navController: NavController, viewModel: ViewerViewModel = hilt
         }
 
         DisposableEffect(Unit) {
+            // PATCH: Boot the notification service on the Viewer node safely
+            val alertServiceIntent = Intent(context, com.securecam.service.AlertService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(alertServiceIntent)
+                } else {
+                    context.startService(alertServiceIntent)
+                }
+            } catch (e: Exception) {}
+
             val rtcManager = WebRTCManager(context).apply { initRenderer(remoteRenderer) }
             
             val observer = object : SimplePeerConnectionObserver() {
@@ -197,7 +222,6 @@ fun ViewerScreen(navController: NavController, viewModel: ViewerViewModel = hilt
 
             onDispose {
                 try { remoteRenderer.release() } catch(e: Exception){}
-                // CRITICAL FIX: Gracefully disconnect and drop ghost WebRTC sockets so buttons work after reopening
                 if (viewerMode == "Local WiFi") {
                     localClient?.send(Gson().toJson(mapOf("type" to "DISCONNECT")))
                 }
@@ -219,7 +243,6 @@ fun ViewerScreen(navController: NavController, viewModel: ViewerViewModel = hilt
                     Spacer(modifier = Modifier.height(16.dp))
                     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         items(alertHistory) { alert ->
-                            // CRITICAL FIX: Safe UI colors match the Camera screen to prevent false red alarms
                             val isSafe = alert.contains("Safe", ignoreCase = true) || alert.contains("CLEAR", ignoreCase = true) || alert.contains("Authorized Face")
                             val isSystem = alert.contains("[SYSTEM]")
                             val bgColor = if (isSystem) Color(0x991976D2) else if (isSafe) Color(0x884CAF50) else Color(0xCCD32F2F)
