@@ -34,7 +34,6 @@ class HybridAIPipeline @Inject constructor(
     }
 
     fun start() {
-        // FIX: Extract the init callback from the LLM Analyzer so we can explicitly track model errors
         llmAnalyzer.initialize { result ->
             if (result is LlmVisionAnalyzer.InitResult.Error) {
                 aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 LLM Init Failed: ${result.message}", 1.0f)) }
@@ -42,14 +41,9 @@ class HybridAIPipeline @Inject constructor(
                 aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 LLM Model Not Found. Go to Settings and import/download the model.", 1.0f)) }
             }
         }
-        
-        // FIX: Do not swallow Face Recognition download failures. Expose them to the Vault logs.
         aiScope.launch { 
-            try { 
-                biometricEngine.initialize() 
-            } catch (e: Exception) {
-                eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 Face Rec Init Failed: ${e.message}", 1.0f))
-            } 
+            try { biometricEngine.initialize() } 
+            catch (e: Exception) { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 Face Rec Init Failed: ${e.message}", 1.0f)) } 
         }
     }
 
@@ -62,6 +56,10 @@ class HybridAIPipeline @Inject constructor(
     fun isBusy(): Boolean = isLlmBusy
 
     fun processFrame(bitmap: Bitmap) {
+        // FIX: Block duplicate frames instantly before the async scope even launches
+        if (isLlmBusy) { bitmap.recycle(); return }
+        isLlmBusy = true
+        
         aiScope.launch {
             try {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
@@ -116,16 +114,19 @@ class HybridAIPipeline @Inject constructor(
                     } catch (e: Exception) {}
                 }
 
-                if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy) {
+                if (skipLlm || !prefs.getBoolean("llm_enabled", true)) {
+                    isLlmBusy = false
                     bitmap.recycle(); return@launch
                 }
                 triggerLlmAnalysis(bitmap)
-            } catch (e: Throwable) { bitmap.recycle() }
+            } catch (e: Throwable) { 
+                isLlmBusy = false
+                bitmap.recycle() 
+            }
         }
     }
 
     private suspend fun triggerLlmAnalysis(bitmap: Bitmap) {
-        isLlmBusy = true
         val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
