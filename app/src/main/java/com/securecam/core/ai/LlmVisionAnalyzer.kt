@@ -111,6 +111,7 @@ class LlmVisionAnalyzer(private val context: Context) {
                     )
                 )
 
+                // FIX: LiteRT v0.10.0 Syntax 
                 val imageBytes = bitmap.toJpegBytes(maxDim = imgMaxDim)
                 val contents = Contents.of(listOf(Content.ImageBytes(imageBytes), Content.Text(userPrompt)))
 
