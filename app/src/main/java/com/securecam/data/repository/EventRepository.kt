@@ -35,4 +35,12 @@ class EventRepository @Inject constructor(private val logDao: LogDao) {
             }
         }
     }
+
+    suspend fun saveLog(log: SecurityLogEntity) {
+        try { logDao.insertLog(log) } catch (e: Exception) {}
+    }
+
+    suspend fun getLocalLogIds(): Set<Long> {
+        return try { logDao.getAllLogsSync().map { it.logTime }.toSet() } catch (e: Exception) { emptySet() }
+    }
 }
