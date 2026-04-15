@@ -28,7 +28,6 @@ class HybridAIPipeline @Inject constructor(
     private val biometricEngine = BiometricEngine(context)
     private var isLlmBusy = false
 
-    // FIX #12: Rolling Timer state for DVR recording coordination
     companion object {
         var activeVideoPath: String? = null
         var activeVideoEndTime: Long = 0L
@@ -45,7 +44,6 @@ class HybridAIPipeline @Inject constructor(
         isLlmBusy = false
     }
 
-    // Expose busy state so CameraScreen can wait before sending next frame
     fun isBusy(): Boolean = isLlmBusy
 
     fun processFrame(bitmap: Bitmap) {
@@ -117,9 +115,10 @@ class HybridAIPipeline @Inject constructor(
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
         val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
-        // FIX #11: llmResolution now maps to real maxOutputTokens (not just a prompt string)
+        // FIX #11: Token budget as prompt instruction (the only mechanism the litertlm
+        // Kotlin API exposes — SamplerConfig has no maxOutputTokens parameter).
         val llmResolution = prefs.getInt("llm_resolution", 280)
-        // FIX #2: ai_img_resolution controls the pixel size sent to the AI vision encoder
+        // FIX #2: Pixel size of the image sent to the AI vision encoder
         val aiImgResolution = prefs.getInt("ai_img_resolution", 512)
 
         try {
@@ -130,7 +129,6 @@ class HybridAIPipeline @Inject constructor(
                         bitmap = bitmap,
                         systemPrompt = sysPrompt,
                         userPrompt = customPrompt,
-                        maxOutputTokens = llmResolution,
                         imgMaxDim = aiImgResolution,
                         onToken = { },
                         onDone = { text ->
@@ -153,8 +151,8 @@ class HybridAIPipeline @Inject constructor(
                     )
                 }
             }
-            // FIX #6: If 15s timeout fires, explicitly cancel the running inference
-            // so it doesn't keep burning CPU after we've given up waiting
+            // FIX #6: If 15s timeout fires, cancel the running inference so it stops
+            // burning CPU after we've given up waiting for the result
             if (timedOut == null) {
                 llmAnalyzer.cancelCurrentInference()
             }
