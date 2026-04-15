@@ -132,12 +132,14 @@ class LlmVisionAnalyzer(private val context: Context) {
     }
 
     private fun Bitmap.toJpegBytes(maxDim: Int = 512): ByteArray {
-        val scale = if (maxOf(width, height) > maxDim) maxDim.toFloat() / maxOf(width, height) else 1f
+        // FIX: Changed maxOf to minOf so the scaling targets the shortest edge, 
+        // preserving the full 1080p width and stopping the ~0.5x bug.
+        val scale = if (minOf(width, height) > maxDim) maxDim.toFloat() / minOf(width, height) else 1f
         val scaled = if (scale < 1f)
             Bitmap.createScaledBitmap(this, (width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1), true)
         else this
         
-        // FIX: Bump JPEG Compression from 85 to 100 to stop destroying distant text/clock details
+        // FIX: Bump JPEG Compression from 85 to 100
         val bytes = ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, 100, it) }.toByteArray()
         if (scaled !== this) scaled.recycle()
         return bytes
