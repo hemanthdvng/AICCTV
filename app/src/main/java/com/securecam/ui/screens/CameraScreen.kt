@@ -202,7 +202,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                         }, 1.0f)
                     }
                 } catch(e: Exception) {}
-                // Ensure 5 FPS constraint to keep Video Recording and Live Stream stable
                 delay(200) 
             }
         }
@@ -224,13 +223,18 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
             viewModel.eventRepository.securityEvents.collect { event ->
                 val text = event.description
                 val vidPath = event.videoPath
-                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(event.timestamp))
                 alertHistory.add(0, "[$timeStr] $text")
                 if (alertHistory.size > 50) alertHistory.removeLast()
                 
-                localServer.broadcast(Gson().toJson(mapOf("type" to "ALERT", "text" to text, "videoPath" to vidPath)))
+                // CRITICAL FIX: Pass exact origin timestamp to TCP and WebRTC
+                val payload = Gson().toJson(mapOf("type" to "ALERT", "text" to text, "videoPath" to vidPath, "timestamp" to event.timestamp))
+                localServer.broadcast(payload)
                 dataChannel?.let { dc ->
-                    if (dc.state() == DataChannel.State.OPEN) { val buffer = ByteBuffer.wrap(text.toByteArray(Charsets.UTF_8)); dc.send(DataChannel.Buffer(buffer, false)) }
+                    if (dc.state() == DataChannel.State.OPEN) { 
+                        val buffer = ByteBuffer.wrap(payload.toByteArray(Charsets.UTF_8))
+                        dc.send(DataChannel.Buffer(buffer, false)) 
+                    }
                 }
             }
         }
