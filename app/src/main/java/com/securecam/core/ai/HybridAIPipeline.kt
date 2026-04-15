@@ -25,7 +25,6 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
     private val biometricEngine = BiometricEngine(context)
     private var isLlmBusy = false
 
-    // CRITICAL FIX: The Rolling Timer prevents simultaneous overlapping alerts from creating duplicate blank videos
     companion object {
         var activeVideoPath: String? = null
         var activeVideoEndTime: Long = 0L
@@ -73,7 +72,6 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                                 if (recognizedNames.isNotEmpty()) {
                                     val namesList = recognizedNames.joinToString(", ")
                                     
-                                    // Rolling Timer Logic for Faces
                                     val now = System.currentTimeMillis()
                                     val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
                                     if (now > activeVideoEndTime) { activeVideoPath = "face_${now}.mp4" }
@@ -99,14 +97,27 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
         val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
-        val llmResolution = prefs.getInt("llm_resolution", 280) // Captures token budget from settings
+        val llmResolution = prefs.getInt("llm_resolution", 280)
 
         try {
             withTimeoutOrNull(15000L) {
                 suspendCancellableCoroutine<Boolean> { continuation ->
                     val sysPrompt = "You are a direct computer vision evaluator. Process this image using a token budget of $llmResolution tokens."
+                    
+                    // DYNAMIC SCALING FIX: Calculate exact size based on token budget (1 token ≈ 256 pixels)
+                    val targetPixels = llmResolution * 256
+                    val aspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
+                    val targetHeight = kotlin.math.sqrt(targetPixels.toDouble() / aspectRatio).toInt().coerceAtLeast(1)
+                    val targetWidth = (targetHeight * aspectRatio).toInt().coerceAtLeast(1)
+                    
+                    val scaledBmp = if (bitmap.width > targetWidth) {
+                        Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+                    } else {
+                        bitmap
+                    }
+
                     llmAnalyzer.analyze(
-                        bitmap = bitmap, 
+                        bitmap = scaledBmp, 
                         systemPrompt = sysPrompt, 
                         userPrompt = customPrompt, 
                         onToken = { },
@@ -117,7 +128,6 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                             aiScope.launch {
                                 val now = System.currentTimeMillis()
                                 if (!isSafe) {
-                                    // Rolling Timer Logic for AI Threats
                                     if (now > activeVideoEndTime) {
                                         activeVideoPath = "alert_${now}.mp4"
                                     }
@@ -129,9 +139,13 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                                 val finalDesc = if (isSafe) "🔍 SCAN: Safe / No Trigger found" else "🚨 $output"
                                 eventRepository.emitEvent(SecurityEvent("LLM_INSIGHT", finalDesc, confThreshold, vidPath))
                             }
+                            if (scaledBmp != bitmap) scaledBmp.recycle()
                             if (continuation.isActive) continuation.resume(true)
                         },
-                        onError = { if (continuation.isActive) continuation.resume(false) }
+                        onError = { 
+                            if (scaledBmp != bitmap) scaledBmp.recycle()
+                            if (continuation.isActive) continuation.resume(false) 
+                        }
                     )
                 }
             }
