@@ -13,7 +13,11 @@ import java.net.ServerSocket
 
 class MjpegServer(private val context: Context) {
     private var serverSocket: ServerSocket? = null
+    
+    @Volatile
     private var isRunning = false
+    
+    @Volatile
     private var latestJpeg: ByteArray? = null
 
     fun updateFrame(bitmap: Bitmap) {
@@ -119,7 +123,6 @@ class MjpegServer(private val context: Context) {
         val framesJson = if (frames.isEmpty()) "[]" else frames.joinToString("','", "['", "']")
         val firstFrame = frames.firstOrNull() ?: ""
         
-        // COMPILER FIX: Construct script tags outside raw string to bypass both HTML and Kotlin parsers
         val sOpen = "<scr" + "ipt>"
         val sClose = "</scr" + "ipt>"
         
