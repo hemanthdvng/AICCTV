@@ -2,7 +2,6 @@ package com.securecam.core.ai
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
@@ -22,9 +21,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class LlmVisionAnalyzer(private val context: Context) {
     private val TAG = "LlmVisionAnalyzer"
     private var engine: Engine? = null
-    // ARCHITECTURE FIX: Persist Conversation to prevent KV cache explosion per frame
     private var currentConversation: Conversation? = null
-    private var lastSystemInstruction: String? = null
+    private var lastSystemPrompt: String = ""
 
     private val llmDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val llmScope = CoroutineScope(llmDispatcher + SupervisorJob())
@@ -39,8 +37,7 @@ class LlmVisionAnalyzer(private val context: Context) {
     }
 
     fun cancelCurrentInference() {
-        // ARCHITECTURE FIX: Explicitly halt native C++ processing
-        try { currentConversation?.cancelProcess() } catch (e: Exception) { Log.e(TAG, "Failed to cancel native process", e) }
+        try { currentConversation?.cancelProcess() } catch (e: Exception) {}
         llmScope.coroutineContext.cancelChildren()
         busy.set(false)
     }
@@ -48,7 +45,7 @@ class LlmVisionAnalyzer(private val context: Context) {
     fun close() {
         initialized.set(false)
         busy.set(false)
-        try { currentConversation?.close() } catch (e: Exception) {} finally { currentConversation = null }
+        try { currentConversation?.close() } catch(e: Exception){} finally { currentConversation = null }
         try { engine?.close() } catch (e: Exception) {} finally { engine = null }
         System.gc()
     }
@@ -58,7 +55,7 @@ class LlmVisionAnalyzer(private val context: Context) {
         llmScope.launch {
             initialized.set(false)
             busy.set(false)
-            try { currentConversation?.close() } catch (e: Exception) {} finally { currentConversation = null }
+            try { currentConversation?.close() } catch(e: Exception){} finally { currentConversation = null }
             try { engine?.close() } catch (e: Exception) {} finally { engine = null }
 
             val modelFile = LlmModelManager.getInstalledModel(context)
@@ -67,24 +64,21 @@ class LlmVisionAnalyzer(private val context: Context) {
                 return@launch
             }
 
-            var backendType = "GPU"
+            var backendType = "CPU"
             try {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
-                backendType = prefs.getString("ai_backend", "GPU") ?: "GPU"
+                backendType = prefs.getString("ai_backend", "CPU") ?: "CPU"
 
                 val backendConfig = when (backendType) {
                     "GPU" -> Backend.GPU()
-                    "NPU" -> Backend.CPU()
+                    "NPU" -> Backend.CPU() 
                     else  -> Backend.CPU()
                 }
-
-                // ARCHITECTURE FIX: Multimodal models heavily restrict Vision backend. GPU is strongly advised for Gemma.
-                val visionConfig = Backend.GPU()
 
                 val cfg = EngineConfig(
                     modelPath = modelFile.absolutePath,
                     backend = backendConfig,
-                    visionBackend = visionConfig,
+                    visionBackend = Backend.GPU(),
                     cacheDir = context.cacheDir.absolutePath
                 )
 
@@ -114,8 +108,7 @@ class LlmVisionAnalyzer(private val context: Context) {
             try {
                 val eng = engine ?: throw IllegalStateException("Engine null")
 
-                // ARCHITECTURE FIX: Create conversation only once or when the system rules change
-                if (currentConversation == null || lastSystemInstruction != systemPrompt) {
+                if (currentConversation == null || lastSystemPrompt != systemPrompt) {
                     currentConversation?.close()
                     currentConversation = eng.createConversation(
                         ConversationConfig(
@@ -123,36 +116,27 @@ class LlmVisionAnalyzer(private val context: Context) {
                             systemInstruction = Contents.of(systemPrompt)
                         )
                     )
-                    lastSystemInstruction = systemPrompt
+                    lastSystemPrompt = systemPrompt
                 }
-
+                
                 val conversation = currentConversation ?: throw IllegalStateException("Conversation null")
                 val imageBytes = bitmap.toJpegBytes(maxDim = imgMaxDim)
                 val contents = Contents.of(listOf(Content.ImageBytes(imageBytes), Content.Text(userPrompt)))
                 val sb = java.lang.StringBuilder()
-
-                // ARCHITECTURE FIX: Use proper modern LiteRT MessageCallback API to prevent deadlocks
+                
                 conversation.sendMessageAsync(
                     contents,
                     object : MessageCallback {
-                        override fun onMessage(message: Message) {
-                            val token = message.toString()
-                            sb.append(token)
-                            // Main thread dispatch if UI stream is needed: CoroutineScope(Dispatchers.Main).launch { onToken(token) }
-                        }
+                        override fun onMessage(message: Message) { sb.append(message.toString()) }
                         override fun onDone() {
-                            CoroutineScope(Dispatchers.Main).launch { 
-                                onDone(sb.toString().trim()) 
+                            CoroutineScope(Dispatchers.Main).launch {
+                                onDone(sb.toString().trim())
                                 busy.set(false)
                             }
                         }
                         override fun onError(throwable: Throwable) {
-                            CoroutineScope(Dispatchers.Main).launch { 
-                                if (throwable is java.util.concurrent.CancellationException) {
-                                    onError("Inference Cancelled")
-                                } else {
-                                    onError(throwable.message ?: "Inference error")
-                                }
+                            CoroutineScope(Dispatchers.Main).launch {
+                                onError(throwable.message ?: "Native Inference Error")
                                 busy.set(false)
                             }
                         }
@@ -160,7 +144,7 @@ class LlmVisionAnalyzer(private val context: Context) {
                     emptyMap()
                 )
             } catch (e: Throwable) {
-                withContext(Dispatchers.Main) { onError(e.message ?: "Native Inference Error") }
+                withContext(Dispatchers.Main) { onError(e.message ?: "Native Inference Exception") }
                 busy.set(false)
             } finally {
                 if (!bitmap.isRecycled) bitmap.recycle()
