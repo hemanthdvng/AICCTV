@@ -16,9 +16,6 @@ import com.securecam.data.local.SecurityLogEntity
 import com.securecam.data.repository.EventRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
-import java.net.Socket
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import javax.inject.Inject
@@ -28,7 +25,6 @@ import androidx.room.Room
 class AlertService : Service() {
     @Inject lateinit var eventRepository: EventRepository
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var viewerSocket: Socket? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_STICKY 
@@ -41,18 +37,17 @@ class AlertService : Service() {
         
         val prefs = getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
 
+        // PATCH: Unified Notification Listener. Triggers safely via internal repository for both Camera and Viewer architectures.
         serviceScope.launch {
             eventRepository.securityEvents.collect { event ->
-                val appRole = prefs.getString("app_role", "Camera") ?: "Camera"
-                if (appRole == "Camera") {
-                    val isSafe = event.description.contains("Safe", ignoreCase = true) || event.description.contains("CLEAR", ignoreCase = true)
-                    if (!isSafe && !event.description.contains("[SYSTEM]")) {
-                        showPopupNotification(event.description)
-                    }
+                val isSafe = event.description.contains("Safe", ignoreCase = true) || event.description.contains("CLEAR", ignoreCase = true)
+                if (!isSafe && !event.description.contains("[SYSTEM]")) {
+                    showPopupNotification(event.description)
                 }
             }
         }
 
+        // Keeps fetching remote logs strictly for database sync, avoiding duplicate raw-socket popup triggers.
         serviceScope.launch {
             while (isActive) {
                 val appRole = prefs.getString("app_role", "Camera") ?: "Camera"
@@ -86,57 +81,12 @@ class AlertService : Service() {
                 delay(15000) 
             }
         }
-
-        serviceScope.launch {
-            while (isActive) {
-                val appRole = prefs.getString("app_role", "Camera") ?: "Camera"
-                if (appRole == "Viewer") {
-                    try {
-                        val ip = prefs.getString("target_ip", "") ?: ""
-                        val token = prefs.getString("security_token", "") ?: ""
-                        if (ip.isNotBlank()) {
-                            viewerSocket = Socket(ip, 8081)
-                            
-                            val out = java.io.PrintWriter(viewerSocket!!.getOutputStream(), true)
-                            out.println(token)
-                            
-                            val reader = BufferedReader(InputStreamReader(viewerSocket!!.getInputStream()))
-                            while (isActive && prefs.getString("app_role", "Camera") == "Viewer") {
-                                val line = reader.readLine() ?: break
-                                val map = Gson().fromJson(line, Map::class.java)
-                                if (map["type"] == "ALERT") {
-                                    val text = map["text"] as? String ?: ""
-                                    val vidPath = map["videoPath"] as? String
-                                    val isSafe = text.contains("Safe", ignoreCase = true) || text.contains("CLEAR", ignoreCase = true)
-                                    
-                                    val db = Room.databaseBuilder(applicationContext, LogDatabase::class.java, "securecam_db").build()
-                                    db.logDao().insertLog(SecurityLogEntity(
-                                        logTime = System.currentTimeMillis(),
-                                        type = if(text.contains("Face")) "BIOMETRIC" else "LLM_INSIGHT",
-                                        description = text,
-                                        confidence = 1.0f,
-                                        videoPath = vidPath
-                                    ))
-                                    db.close()
-
-                                    if (!isSafe && !text.contains("[SYSTEM]")) {
-                                        showPopupNotification(text)
-                                    }
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {}
-                }
-                delay(5000)
-            }
-        }
     }
 
     private fun showPopupNotification(text: String) {
         val prefs = getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("enable_notifications", true)) return
         
-        // RESCUE PATCH: Prevent SecurityException from crashing the service entirely
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return
         }
@@ -145,13 +95,12 @@ class AlertService : Service() {
             val notif = NotificationCompat.Builder(this, "securecam_alerts")
                 .setContentTitle("🚨 Security Alert")
                 .setContentText(text)
-                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setSmallIcon(applicationInfo.icon) // PATCH: Bypasses Android 14+ OEM system drawable suppression
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .build()
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             
-            // RESCUE PATCH: Modulo ensures ID is positive. Negative IDs are silently dropped by OnePlus/OxygenOS.
             val safeId = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
             manager.notify(safeId, notif)
         } catch(e: Exception) {
@@ -173,7 +122,7 @@ class AlertService : Service() {
         return NotificationCompat.Builder(this, "securecam_service")
             .setContentTitle("AI CCTV")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setSmallIcon(applicationInfo.icon) // PATCH: Native icon enforcing
             .build()
     }
 
@@ -181,6 +130,5 @@ class AlertService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
-        try { viewerSocket?.close() } catch (e: Exception) {}
     }
 }
