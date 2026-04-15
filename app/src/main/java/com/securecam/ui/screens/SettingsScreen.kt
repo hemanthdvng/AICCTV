@@ -182,7 +182,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                     "video_record_len" to prefs.getFloat("video_record_len", 15f).toDouble(),
                     "camera_resolution" to prefs.getInt("camera_resolution", 1080),
                     "video_resolution" to prefs.getInt("video_resolution", 720),
-                    "llm_resolution" to prefs.getInt("llm_resolution", 280),
+                    "llm_resolution" to prefs.getInt("llm_resolution", 1120),
                     "confidence_threshold" to prefs.getFloat("confidence_threshold", 0.60f).toDouble(),
                     "prompt_usr" to prefs.getString("prompt_usr", ""),
                     "llm_enabled" to prefs.getBoolean("llm_enabled", true),
@@ -265,7 +265,7 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
 
     var scanInterval by remember { mutableStateOf(prefs.getFloat("scan_interval_sec", 5f).coerceIn(1f, 60f)) }
     var videoRecordLen by remember { mutableStateOf(prefs.getFloat("video_record_len", 15f).coerceIn(5f, 60f)) }
-    var llmResolution by remember { mutableStateOf(prefs.getInt("llm_resolution", 280)) }
+    var llmResolution by remember { mutableStateOf(prefs.getInt("llm_resolution", 1120)) }
     var resExpanded by remember { mutableStateOf(false) }
 
     var popupNotifications by remember { mutableStateOf(prefs.getBoolean("enable_notifications", true)) }
