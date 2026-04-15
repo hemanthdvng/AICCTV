@@ -19,7 +19,8 @@ class LocalApiServer(port: Int, val token: String, val context: Context) : NanoH
                     val db = SQLiteDatabase.openDatabase(activeDb.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
                     if (session.method == Method.DELETE) {
                         val id = session.parameters["id"]?.firstOrNull()
-                        if (id != null) db.execSQL("DELETE FROM security_logs WHERE id = $id")
+                        // CRITICAL FIX: Parameterized query to prevent SQL Injection
+                        if (id != null) db.execSQL("DELETE FROM security_logs WHERE id = ?", arrayOf(id))
                         db.close()
                         newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "Deleted")
                     } else {
