@@ -109,7 +109,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
         val ipAddress = remember { getLocalIpAddress() }
 
         val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
-        var scanIntervalMs by remember { mutableStateOf((prefs.getFloat("scan_interval_sec", 5f) * 1000).toLong()) }
+        var scanIntervalMs by remember { mutableStateOf(((try { prefs.getFloat("scan_interval_sec", 5f) } catch(e:Exception){ prefs.getInt("scan_interval_sec", 5).toFloat() }) * 1000).toLong()) }
         val securityToken = remember { prefs.getString("security_token", "") ?: "" }
         val localServer = remember { LocalSignalingServer(8081, securityToken) }
         val apiServer = remember { LocalApiServer(8082, securityToken, context) }
