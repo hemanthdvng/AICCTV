@@ -11,6 +11,7 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.*
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -96,7 +97,6 @@ class LlmVisionAnalyzer(private val context: Context) {
         if (!busy.compareAndSet(false, true)) { bitmap.recycle(); onError("Engine is busy"); return }
 
         llmScope.launch {
-            var scaled: Bitmap? = null
             try {
                 val eng = engine ?: throw IllegalStateException("Engine null")
 
@@ -111,15 +111,12 @@ class LlmVisionAnalyzer(private val context: Context) {
                     )
                 )
 
-                // FIX: Use proper Content.image() parsing expected by the vision-enabled model
-                val scale = if (maxOf(bitmap.width, bitmap.height) > imgMaxDim) imgMaxDim.toFloat() / maxOf(bitmap.width, bitmap.height) else 1f
-                scaled = if (scale < 1f) Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true) else bitmap
-                
-                val contents = Contents.of(listOf(Content.image(scaled), Content.Text(userPrompt)))
+                val imageBytes = bitmap.toJpegBytes(maxDim = imgMaxDim)
+                val contents = Contents.of(listOf(Content.ImageBytes(imageBytes), Content.Text(userPrompt)))
 
                 val sb = StringBuilder()
                 conversation.sendMessageAsync(contents).collect { message ->
-                    sb.append(message.text)
+                    sb.append(message.toString())
                 }
 
                 withContext(Dispatchers.Main) { onDone(sb.toString().trim()) }
@@ -129,9 +126,18 @@ class LlmVisionAnalyzer(private val context: Context) {
                 withContext(Dispatchers.Main) { onError(e.message ?: "Native Inference Error") }
             } finally {
                 busy.set(false)
-                if (scaled != null && scaled !== bitmap && !scaled.isRecycled) scaled.recycle()
                 if (!bitmap.isRecycled) bitmap.recycle()
             }
         }
+    }
+
+    private fun Bitmap.toJpegBytes(maxDim: Int = 512): ByteArray {
+        val scale = if (maxOf(width, height) > maxDim) maxDim.toFloat() / maxOf(width, height) else 1f
+        val scaled = if (scale < 1f)
+            Bitmap.createScaledBitmap(this, (width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1), true)
+        else this
+        val bytes = ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
+        if (scaled !== this) scaled.recycle()
+        return bytes
     }
 }
