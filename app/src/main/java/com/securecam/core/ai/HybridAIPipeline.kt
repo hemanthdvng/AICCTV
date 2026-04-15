@@ -97,14 +97,14 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
         val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
-        val llmResolution = prefs.getInt("llm_resolution", 280)
+        // CRITICAL FIX: Base resolution set to 1120 tokens by default to allow distant object detection
+        val llmResolution = prefs.getInt("llm_resolution", 1120)
 
         try {
             withTimeoutOrNull(15000L) {
                 suspendCancellableCoroutine<Boolean> { continuation ->
                     val sysPrompt = "You are a direct computer vision evaluator. Process this image using a token budget of $llmResolution tokens."
                     
-                    // DYNAMIC SCALING FIX: Calculate exact size based on token budget (1 token ≈ 256 pixels)
                     val targetPixels = llmResolution * 256
                     val aspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
                     val targetHeight = kotlin.math.sqrt(targetPixels.toDouble() / aspectRatio).toInt().coerceAtLeast(1)
