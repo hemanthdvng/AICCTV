@@ -10,7 +10,8 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
-data class SecurityEvent(val type: String, val description: String, val confidence: Float, val videoPath: String? = null)
+// CRITICAL FIX: Lock the timestamp globally at instantiation
+data class SecurityEvent(val type: String, val description: String, val confidence: Float, val videoPath: String? = null, val timestamp: Long = System.currentTimeMillis())
 
 @Singleton
 class EventRepository @Inject constructor(private val logDao: LogDao) {
@@ -24,7 +25,7 @@ class EventRepository @Inject constructor(private val logDao: LogDao) {
                 try {
                     logDao.insertLog(
                         SecurityLogEntity(
-                            logTime = System.currentTimeMillis(),
+                            logTime = event.timestamp,
                             type = event.type,
                             description = event.description,
                             confidence = event.confidence,
