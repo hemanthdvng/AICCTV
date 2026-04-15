@@ -34,8 +34,23 @@ class HybridAIPipeline @Inject constructor(
     }
 
     fun start() {
-        llmAnalyzer.initialize {}
-        aiScope.launch { try { biometricEngine.initialize() } catch (e: Exception) {} }
+        // FIX: Extract the init callback from the LLM Analyzer so we can explicitly track model errors
+        llmAnalyzer.initialize { result ->
+            if (result is LlmVisionAnalyzer.InitResult.Error) {
+                aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 LLM Init Failed: ${result.message}", 1.0f)) }
+            } else if (result is LlmVisionAnalyzer.InitResult.ModelNotFound) {
+                aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 LLM Model Not Found. Go to Settings and import/download the model.", 1.0f)) }
+            }
+        }
+        
+        // FIX: Do not swallow Face Recognition download failures. Expose them to the Vault logs.
+        aiScope.launch { 
+            try { 
+                biometricEngine.initialize() 
+            } catch (e: Exception) {
+                eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 Face Rec Init Failed: ${e.message}", 1.0f))
+            } 
+        }
     }
 
     fun stop() {
@@ -144,7 +159,6 @@ class HybridAIPipeline @Inject constructor(
                             }
                             if (continuation.isActive) continuation.resume(true)
                         },
-                        // FIX: Unmask the silent failures so they appear in logs
                         onError = { errorMsg -> 
                             aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 AI Engine Failed: $errorMsg", 1.0f)) }
                             if (continuation.isActive) continuation.resume(false) 
