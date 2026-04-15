@@ -89,7 +89,6 @@ class LlmVisionAnalyzer(private val context: Context) {
                 val eng = engine ?: throw IllegalStateException("Engine null")
                 val conversation = eng.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 0.4), systemInstruction = Contents.of(systemPrompt)))
 
-                // CRITICAL FIX: Raw 1080p (1920px) image fed directly into AI to support 1120 token budget
                 val imageBytes = bitmap.toJpegBytes(maxDim = 1920)
                 val contents = Contents.of(listOf(Content.ImageBytes(imageBytes), Content.Text(userPrompt)))
 
@@ -111,6 +110,7 @@ class LlmVisionAnalyzer(private val context: Context) {
     private fun Bitmap.toJpegBytes(maxDim: Int = 1920): ByteArray {
         val scale = if (maxOf(width, height) > maxDim) maxDim.toFloat() / maxOf(width, height) else 1f
         val scaled = if (scale < 1f) Bitmap.createScaledBitmap(this, (width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1), true) else this
-        return ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, 70, it) }.toByteArray()
+        // CRITICAL FIX: Increased JPEG quality to 85 to prevent artifacting from destroying distant objects
+        return ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
     }
 }
