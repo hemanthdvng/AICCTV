@@ -59,12 +59,14 @@ class BiometricEngine(private val context: Context) {
             }
         }
 
-        val fileInputStream = FileInputStream(modelFile)
-        val fileChannel = fileInputStream.channel
-        val modelBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, modelFile.length())
-
-        val options = Interpreter.Options().apply { numThreads = 4 }
-        interpreter = Interpreter(modelBuffer, options)
+        // CRITICAL FIX: Close File Descriptors cleanly after mapping
+        FileInputStream(modelFile).use { fileInputStream ->
+            fileInputStream.channel.use { fileChannel ->
+                val modelBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, modelFile.length())
+                val options = Interpreter.Options().apply { numThreads = 4 }
+                interpreter = Interpreter(modelBuffer, options)
+            }
+        }
     }
 
     suspend fun getFaceEmbedding(bitmap: Bitmap): FloatArray? = withContext(Dispatchers.Default) {
