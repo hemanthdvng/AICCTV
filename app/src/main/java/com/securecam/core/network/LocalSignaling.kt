@@ -14,20 +14,24 @@ class LocalSignalingServer(private val port: Int, private val expectedToken: Str
     private var serverSocket: ServerSocket? = null
     private val clients = CopyOnWriteArrayList<PrintWriter>()
     private var isRunning = false
+    
+    // CRITICAL FIX: Managed scope for instant teardown
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun start() {
         if (isRunning) return
         isRunning = true
-        CoroutineScope(Dispatchers.IO).launch {
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        
+        scope.launch {
             try {
                 serverSocket = ServerSocket().apply {
                     reuseAddress = true
                     bind(InetSocketAddress(port))
                 }
-                while (isRunning) {
+                while (isRunning && isActive) {
                     val clientSocket = serverSocket?.accept() ?: continue
                     
-                    // FIX: Spawn a new coroutine per client so Viewer UI and Background Service can run simultaneously
                     launch {
                         var out: PrintWriter? = null
                         try {
@@ -41,7 +45,7 @@ class LocalSignalingServer(private val port: Int, private val expectedToken: Str
                             }
                             
                             clients.add(out)
-                            while (isRunning && !clientSocket.isClosed) {
+                            while (isRunning && !clientSocket.isClosed && isActive) {
                                 val msg = reader.readLine() ?: break
                                 withContext(Dispatchers.Main) { onMessageReceived?.invoke(msg) }
                             }
@@ -56,11 +60,13 @@ class LocalSignalingServer(private val port: Int, private val expectedToken: Str
     }
 
     fun broadcast(msg: String) { 
-        CoroutineScope(Dispatchers.IO).launch { clients.forEach { it.println(msg) } } 
+        scope.launch { clients.forEach { it.println(msg) } } 
     }
 
     fun stop() {
         isRunning = false
+        // CRITICAL FIX: Instantly purge all active and pending coroutines attached to this instance
+        scope.cancel()
         try { serverSocket?.close() } catch (e: Exception) {}
         clients.clear()
     }
@@ -73,10 +79,16 @@ class LocalSignalingClient(private val ip: String, private val port: Int, privat
     private var socket: Socket? = null
     private var out: PrintWriter? = null
     private var isRunning = false
+    
+    // CRITICAL FIX: Managed scope for UI client connections
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun connect() {
+        if (isRunning) return
         isRunning = true
-        CoroutineScope(Dispatchers.IO).launch {
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        
+        scope.launch {
             try {
                 socket = Socket(ip, port)
                 out = PrintWriter(socket!!.getOutputStream(), true)
@@ -85,7 +97,7 @@ class LocalSignalingClient(private val ip: String, private val port: Int, privat
                 withContext(Dispatchers.Main) { onConnected?.invoke() }
                 
                 val reader = BufferedReader(InputStreamReader(socket!!.inputStream))
-                while (isRunning && !socket!!.isClosed) {
+                while (isRunning && !socket!!.isClosed && isActive) {
                     val msg = reader.readLine() ?: break
                     withContext(Dispatchers.Main) { onMessageReceived?.invoke(msg) }
                 }
@@ -95,10 +107,14 @@ class LocalSignalingClient(private val ip: String, private val port: Int, privat
         }
     }
 
-    fun send(msg: String) { CoroutineScope(Dispatchers.IO).launch { out?.println(msg) } }
+    fun send(msg: String) { 
+        scope.launch { out?.println(msg) } 
+    }
 
     fun disconnect() {
         isRunning = false
+        // CRITICAL FIX: Prevent memory leaks by destroying the listener coroutine when UI unmounts
+        scope.cancel()
         try { socket?.close() } catch (e: Exception) {}
     }
 }
