@@ -2,7 +2,6 @@ package com.securecam.core.ai
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.google.mlkit.vision.common.InputImage
@@ -37,9 +36,6 @@ class HybridAIPipeline @Inject constructor(
     val activeVideoPath = AtomicReference<String?>(null)
     val activeVideoEndTime = AtomicLong(0L)
 
-    // TIMING FIX: State memory for the user's sliding interval logic
-    private var lastLlmAnalysisTime = 0L
-
     private val prefs by lazy { context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE) }
     
     private val faceDetector by lazy { 
@@ -58,7 +54,9 @@ class HybridAIPipeline @Inject constructor(
                     aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "[SYSTEM] LLM model not found. Download from Settings.", 1.0f)) }
                 is LlmVisionAnalyzer.InitResult.Error -> 
                     aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "[SYSTEM] LLM init failed: ${result.message}", 1.0f)) }
-                LlmVisionAnalyzer.InitResult.Success -> { /* ready */ }
+                LlmVisionAnalyzer.InitResult.Success -> { 
+                    aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "[SYSTEM] LLM Engine Online and Ready.", 1.0f)) }
+                }
             }
         }
         aiScope.launch { try { biometricEngine.initialize() } catch (e: Exception) {} }
@@ -128,23 +126,10 @@ class HybridAIPipeline @Inject constructor(
                     } catch (e: Exception) {}
                 }
 
-                val analysisIntervalSec = prefs.getInt("llm_analysis_interval", 5)
-                val analysisIntervalMs = analysisIntervalSec * 1000L
-                val now = System.currentTimeMillis()
-
                 if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy.get()) {
                     bitmap.recycle(); return@launch
                 }
-
-                // TIMING LOGIC: Wait until interval has passed since the LAST analysis started
-                // If LLM takes 3s, drop all frames until 5s passes. If LLM takes 6s, 6 > 5, so we trigger immediately upon clearing.
-                if (now - lastLlmAnalysisTime < analysisIntervalMs) {
-                    bitmap.recycle(); return@launch
-                }
-
-                lastLlmAnalysisTime = System.currentTimeMillis()
                 triggerLlmAnalysis(bitmap)
-
             } catch (e: Throwable) { bitmap.recycle() }
         }
     }
@@ -183,14 +168,15 @@ class HybridAIPipeline @Inject constructor(
                             if (continuation.isActive) continuation.resume(true)
                         },
                         onError = { err ->
-                            Log.e("HybridAIPipeline", "LLM Error: $err")
+                            // Broadcasts errors instead of swallowing silently
+                            if (!err.contains("busy")) aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "⚠️ [SYSTEM] LLM Error: $err", 1.0f)) }
                             if (continuation.isActive) continuation.resume(false)
                         }
                     )
                 }
             }
             if (timedOut == null) {
-                Log.w("HybridAIPipeline", "Inference timed out. Enforcing C++ thread halt.")
+                aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM", "⚠️ [SYSTEM] Inference Timed Out (25s). Restarting native engine...", 1.0f)) }
                 llmAnalyzer.cancelCurrentInference()
             }
         } finally {
