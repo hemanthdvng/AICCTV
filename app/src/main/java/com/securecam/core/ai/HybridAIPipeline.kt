@@ -56,7 +56,6 @@ class HybridAIPipeline @Inject constructor(
     fun isBusy(): Boolean = isLlmBusy
 
     fun processFrame(bitmap: Bitmap) {
-        // FIX: Block duplicate frames instantly before the async scope even launches
         if (isLlmBusy) { bitmap.recycle(); return }
         isLlmBusy = true
         
@@ -128,6 +127,26 @@ class HybridAIPipeline @Inject constructor(
 
     private suspend fun triggerLlmAnalysis(bitmap: Bitmap) {
         val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
+        
+        // WATCHDOG: Detect if the C++ engine crashed on the previous run
+        if (prefs.getBoolean("ai_native_crash_flag", false)) {
+            prefs.edit()
+                .putBoolean("llm_enabled", false)
+                .putBoolean("ai_native_crash_flag", false)
+                .commit()
+            
+            aiScope.launch { 
+                eventRepository.emitEvent(SecurityEvent(
+                    "SYSTEM_ERROR", 
+                    "🚨 Fatal AI Crash Detected! The local model is likely corrupted or missing image capabilities. LLM auto-disabled to prevent bootloops.", 
+                    1.0f
+                )) 
+            }
+            isLlmBusy = false
+            bitmap.recycle()
+            return
+        }
+
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
         val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
@@ -135,6 +154,9 @@ class HybridAIPipeline @Inject constructor(
         val aiImgResolution = prefs.getInt("ai_img_resolution", 512)
 
         try {
+            // ARM THE WATCHDOG: Force write to physical storage before hitting C++ native code
+            prefs.edit().putBoolean("ai_native_crash_flag", true).commit()
+
             val timedOut = withTimeoutOrNull(15000L) {
                 suspendCancellableCoroutine<Boolean> { continuation ->
                     val sysPrompt = "You are a concise security camera AI. Analyze the image and respond in $llmResolution tokens or fewer."
@@ -145,6 +167,9 @@ class HybridAIPipeline @Inject constructor(
                         imgMaxDim = aiImgResolution,
                         onToken = { },
                         onDone = { text ->
+                            // DISARM THE WATCHDOG: C++ inference completed safely
+                            prefs.edit().putBoolean("ai_native_crash_flag", false).commit()
+                            
                             val output = text.trim()
                             val isSafe = output.contains("CLEAR", ignoreCase = true)
                             aiScope.launch {
@@ -161,6 +186,9 @@ class HybridAIPipeline @Inject constructor(
                             if (continuation.isActive) continuation.resume(true)
                         },
                         onError = { errorMsg -> 
+                            // DISARM THE WATCHDOG: Inference failed but caught safely in Kotlin
+                            prefs.edit().putBoolean("ai_native_crash_flag", false).commit()
+                            
                             aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 AI Engine Failed: $errorMsg", 1.0f)) }
                             if (continuation.isActive) continuation.resume(false) 
                         }
@@ -168,9 +196,14 @@ class HybridAIPipeline @Inject constructor(
                 }
             }
             if (timedOut == null) {
+                // DISARM THE WATCHDOG: Timeout
+                prefs.edit().putBoolean("ai_native_crash_flag", false).commit()
                 llmAnalyzer.cancelCurrentInference()
                 aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 AI Engine Timed Out (15s)", 1.0f)) }
             }
+        } catch (e: Exception) {
+            // DISARM THE WATCHDOG: General exception
+            prefs.edit().putBoolean("ai_native_crash_flag", false).commit()
         } finally {
             isLlmBusy = false
             if (!bitmap.isRecycled) bitmap.recycle()
