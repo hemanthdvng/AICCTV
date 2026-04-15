@@ -120,7 +120,6 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                 val socket = Socket(ip, 8081)
                 val out = PrintWriter(socket.getOutputStream(), true)
                 out.println(token)
-                // OPTION 3B: Removed confidence_threshold from payload
                 val syncData = mapOf(
                     "type" to "SYNC_SETTINGS",
                     "scan_interval_sec" to prefs.getFloat("scan_interval_sec", 5f).toDouble(),
@@ -234,7 +233,8 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
         viewModel.loadPrefs(context)
-        try { androidx.core.content.ContextCompat.startForegroundService(context, android.content.Intent(context, com.securecam.service.AlertService::class.java)) } catch (e: Exception) {}
+        // CRITICAL FIX: Removed premature startForegroundService(AlertService) call which causes crashes on Android 14
+        // The service is correctly booted in the CameraScreen and ViewerScreen lifecycles instead.
         if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
