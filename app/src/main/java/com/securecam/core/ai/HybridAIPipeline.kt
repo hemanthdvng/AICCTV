@@ -144,7 +144,7 @@ class HybridAIPipeline @Inject constructor(
                             }
                             if (continuation.isActive) continuation.resume(true)
                         },
-                        // FIX: Expose errors so we can actually see native crashes in the Vault logs
+                        // FIX: Unmask the silent failures so they appear in logs
                         onError = { errorMsg -> 
                             aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 AI Engine Failed: $errorMsg", 1.0f)) }
                             if (continuation.isActive) continuation.resume(false) 
