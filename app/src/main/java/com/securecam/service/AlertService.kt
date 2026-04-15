@@ -32,7 +32,7 @@ class AlertService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(1, buildNotification("SecureCam Background Service Active"))
+        startForeground(1, buildNotification("AI CCTV Background Service Active"))
         
         val prefs = getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
 
@@ -101,7 +101,6 @@ class AlertService : Service() {
                                     val vidPath = map["videoPath"] as? String
                                     val isSafe = text.contains("Safe", ignoreCase = true) || text.contains("CLEAR", ignoreCase = true)
                                     
-                                    // CRITICAL FIX: Extract original Camera timestamp to sync identical deduplication keys
                                     val exactTime = (map["timestamp"] as? Double)?.toLong() ?: System.currentTimeMillis()
                                     
                                     eventRepository.saveLog(SecurityLogEntity(
@@ -142,8 +141,8 @@ class AlertService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel("securecam_service", "SecureCam Background", NotificationManager.IMPORTANCE_LOW)
-            val alertChannel = NotificationChannel("securecam_alerts", "SecureCam Alerts", NotificationManager.IMPORTANCE_HIGH)
+            val serviceChannel = NotificationChannel("securecam_service", "AI CCTV Background", NotificationManager.IMPORTANCE_LOW)
+            val alertChannel = NotificationChannel("securecam_alerts", "AI CCTV Alerts", NotificationManager.IMPORTANCE_HIGH)
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(serviceChannel)
             manager.createNotificationChannel(alertChannel)
@@ -152,7 +151,7 @@ class AlertService : Service() {
 
     private fun buildNotification(text: String): Notification {
         return NotificationCompat.Builder(this, "securecam_service")
-            .setContentTitle("SecureCam")
+            .setContentTitle("AI CCTV")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .build()
