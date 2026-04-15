@@ -115,10 +115,7 @@ class HybridAIPipeline @Inject constructor(
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
         val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
-        // FIX #11: Token budget as prompt instruction (the only mechanism the litertlm
-        // Kotlin API exposes — SamplerConfig has no maxOutputTokens parameter).
         val llmResolution = prefs.getInt("llm_resolution", 280)
-        // FIX #2: Pixel size of the image sent to the AI vision encoder
         val aiImgResolution = prefs.getInt("ai_img_resolution", 512)
 
         try {
@@ -147,14 +144,17 @@ class HybridAIPipeline @Inject constructor(
                             }
                             if (continuation.isActive) continuation.resume(true)
                         },
-                        onError = { if (continuation.isActive) continuation.resume(false) }
+                        // FIX: Expose errors so we can actually see native crashes in the Vault logs
+                        onError = { errorMsg -> 
+                            aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 AI Engine Failed: $errorMsg", 1.0f)) }
+                            if (continuation.isActive) continuation.resume(false) 
+                        }
                     )
                 }
             }
-            // FIX #6: If 15s timeout fires, cancel the running inference so it stops
-            // burning CPU after we've given up waiting for the result
             if (timedOut == null) {
                 llmAnalyzer.cancelCurrentInference()
+                aiScope.launch { eventRepository.emitEvent(SecurityEvent("SYSTEM_ERROR", "🚨 AI Engine Timed Out (15s)", 1.0f)) }
             }
         } finally {
             isLlmBusy = false
