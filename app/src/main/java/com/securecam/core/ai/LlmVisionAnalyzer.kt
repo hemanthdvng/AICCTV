@@ -11,7 +11,6 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.*
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -31,7 +30,6 @@ class LlmVisionAnalyzer(private val context: Context) {
         object ModelNotFound : InitResult()
     }
 
-    // FIX #6: Cancel running inference (e.g. on timeout) without destroying the scope
     fun cancelCurrentInference() {
         llmScope.coroutineContext.cancelChildren()
         busy.set(false)
@@ -62,8 +60,6 @@ class LlmVisionAnalyzer(private val context: Context) {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
                 backendType = prefs.getString("ai_backend", "CPU") ?: "CPU"
 
-                // FIX #4: GPU is the fast path. NPU maps to GPU since NPU requires
-                // nativeLibraryDir which we don't have, and CPU is the safe fallback.
                 val backendConfig = when (backendType) {
                     "GPU" -> Backend.GPU()
                     "NPU" -> Backend.GPU()
@@ -86,9 +82,6 @@ class LlmVisionAnalyzer(private val context: Context) {
         }
     }
 
-    // FIX #2: imgMaxDim controls pixel size sent to AI (default 512, not 1920).
-    // FIX #11: Token budget passed as prompt text — the only mechanism the litertlm
-    //          Kotlin API exposes (SamplerConfig has no maxOutputTokens parameter).
     @OptIn(ExperimentalApi::class)
     fun analyze(
         bitmap: Bitmap,
@@ -103,32 +96,30 @@ class LlmVisionAnalyzer(private val context: Context) {
         if (!busy.compareAndSet(false, true)) { bitmap.recycle(); onError("Engine is busy"); return }
 
         llmScope.launch {
+            var scaled: Bitmap? = null
             try {
                 val eng = engine ?: throw IllegalStateException("Engine null")
 
-                // FIX #3+#4 (compile errors):
-                //   topP and temperature must be Double (not Float) per the litertlm API.
-                //   SamplerConfig has NO maxOutputTokens — only topK, topP, temperature.
                 val conversation = eng.createConversation(
                     ConversationConfig(
                         samplerConfig = SamplerConfig(
                             topK = 40,
-                            topP = 0.95,       // Double — not 0.95f
-                            temperature = 0.4  // Double — not 0.4f
+                            topP = 0.95,
+                            temperature = 0.4
                         ),
                         systemInstruction = Contents.of(systemPrompt)
                     )
                 )
 
-                // FIX #2: Scale to imgMaxDim before encoding.
-                val imageBytes = bitmap.toJpegBytes(maxDim = imgMaxDim)
-                val contents = Contents.of(listOf(Content.ImageBytes(imageBytes), Content.Text(userPrompt)))
+                // FIX: Use proper Content.image() parsing expected by the vision-enabled model
+                val scale = if (maxOf(bitmap.width, bitmap.height) > imgMaxDim) imgMaxDim.toFloat() / maxOf(bitmap.width, bitmap.height) else 1f
+                scaled = if (scale < 1f) Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true) else bitmap
+                
+                val contents = Contents.of(listOf(Content.image(scaled), Content.Text(userPrompt)))
 
                 val sb = StringBuilder()
-                // FIX (compile error line 133): Message has no .text property.
-                // Official pattern per Google docs: message.toString() returns the generated text.
                 conversation.sendMessageAsync(contents).collect { message ->
-                    sb.append(message.toString())
+                    sb.append(message.text)
                 }
 
                 withContext(Dispatchers.Main) { onDone(sb.toString().trim()) }
@@ -138,19 +129,9 @@ class LlmVisionAnalyzer(private val context: Context) {
                 withContext(Dispatchers.Main) { onError(e.message ?: "Native Inference Error") }
             } finally {
                 busy.set(false)
+                if (scaled != null && scaled !== bitmap && !scaled.isRecycled) scaled.recycle()
                 if (!bitmap.isRecycled) bitmap.recycle()
             }
         }
-    }
-
-    // FIX #5: Recycle the scaled bitmap copy to prevent memory leak on every inference call
-    private fun Bitmap.toJpegBytes(maxDim: Int = 512): ByteArray {
-        val scale = if (maxOf(width, height) > maxDim) maxDim.toFloat() / maxOf(width, height) else 1f
-        val scaled = if (scale < 1f)
-            Bitmap.createScaledBitmap(this, (width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1), true)
-        else this
-        val bytes = ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
-        if (scaled !== this) scaled.recycle()
-        return bytes
     }
 }
