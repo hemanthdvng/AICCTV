@@ -14,6 +14,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlin.coroutines.resume
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,7 +24,9 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
     private val aiScope = CoroutineScope(aiDispatcher + SupervisorJob())
     private val llmAnalyzer = LlmVisionAnalyzer(context)
     private val biometricEngine = BiometricEngine(context)
-    private var isLlmBusy = false
+    
+    // CRITICAL FIX: AtomicBoolean prevents coroutine suspension race conditions
+    private val isLlmBusy = AtomicBoolean(false)
 
     companion object {
         var activeVideoPath: String? = null
@@ -34,13 +37,19 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
         llmAnalyzer.initialize {}
         aiScope.launch { try { biometricEngine.initialize() } catch (e: Exception) {} }
     }
-    fun stop() { llmAnalyzer.close(); try { biometricEngine.close() } catch (e: Exception) {}; isLlmBusy = false }
+    
+    fun stop() { 
+        llmAnalyzer.close()
+        try { biometricEngine.close() } catch (e: Exception) {}
+        isLlmBusy.set(false) 
+    }
 
     fun processFrame(bitmap: Bitmap) {
         aiScope.launch {
             try {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
                 var skipLlm = false
+                
                 if (prefs.getBoolean("face_recog_enabled", false)) {
                     try {
                         val inputImage = InputImage.fromBitmap(bitmap, 0)
@@ -85,19 +94,29 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                         }
                     } catch (e: Exception) {} 
                 }
-                if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy) { bitmap.recycle(); return@launch }
+                
+                if (skipLlm || !prefs.getBoolean("llm_enabled", true) || isLlmBusy.get()) { 
+                    bitmap.recycle()
+                    return@launch 
+                }
                 triggerLlmAnalysis(bitmap)
-            } catch (e: Throwable) { bitmap.recycle() }
+            } catch (e: Throwable) { 
+                bitmap.recycle() 
+            }
         }
     }
 
     private suspend fun triggerLlmAnalysis(bitmap: Bitmap) {
-        isLlmBusy = true
+        // CRITICAL FIX: compareAndSet prevents dual-execution if two frames pass the earlier check
+        if (!isLlmBusy.compareAndSet(false, true)) {
+            bitmap.recycle()
+            return
+        }
+        
         val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
         val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
         val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
-        // CRITICAL FIX: Base resolution set to 1120 tokens by default to allow distant object detection
         val llmResolution = prefs.getInt("llm_resolution", 1120)
 
         try {
@@ -149,6 +168,9 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                     )
                 }
             }
-        } finally { isLlmBusy = false; if (!bitmap.isRecycled) bitmap.recycle() }
+        } finally { 
+            isLlmBusy.set(false)
+            if (!bitmap.isRecycled) bitmap.recycle() 
+        }
     }
 }
