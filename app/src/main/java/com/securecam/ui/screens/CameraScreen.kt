@@ -40,6 +40,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import org.webrtc.DataChannel
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
@@ -149,60 +151,60 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
         }
 
         LaunchedEffect(Unit) {
-            var lastFrameTime = 0L
-            try {
-                // CRITICAL FIX: Changed 0.5f to 1.0f to pass raw uncompressed 1080p frame directly to AI and Recording Engine
-                localRenderer.addFrameListener({ bitmap ->
-                    val currentFrameTime = System.currentTimeMillis()
-                    if (currentFrameTime - lastFrameTime < 200) {
-                        return@addFrameListener
-                    }
-                    lastFrameTime = currentFrameTime
+            while(isActive) {
+                try {
+                    suspendCancellableCoroutine<Unit> { continuation ->
+                        localRenderer.addFrameListener({ bitmap ->
+                            try {
+                                val bmpCopy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                                if (bmpCopy != null) { 
+                                    mjpegServer.updateFrame(bmpCopy)
 
-                    try {
-                        val bmpCopy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-                        if (bmpCopy != null) { 
-                            mjpegServer.updateFrame(bmpCopy)
+                                    val now = System.currentTimeMillis()
+                                    val endTime = HybridAIPipeline.activeVideoEndTime
 
-                            val now = System.currentTimeMillis()
-                            val endTime = HybridAIPipeline.activeVideoEndTime
+                                    if (now < endTime && HybridAIPipeline.activeVideoPath != null) {
+                                        val vidRes = prefs.getInt("video_resolution", 720)
+                                        val scaledBmp = if (bmpCopy.height > vidRes) {
+                                            val ratio = bmpCopy.width.toFloat() / bmpCopy.height.toFloat()
+                                            Bitmap.createScaledBitmap(bmpCopy, (vidRes * ratio).toInt(), vidRes, true)
+                                        } else bmpCopy
 
-                            if (now < endTime && HybridAIPipeline.activeVideoPath != null) {
-                                val vidRes = prefs.getInt("video_resolution", 720)
-                                val scaledBmp = if (bmpCopy.height > vidRes) {
-                                    val ratio = bmpCopy.width.toFloat() / bmpCopy.height.toFloat()
-                                    Bitmap.createScaledBitmap(bmpCopy, (vidRes * ratio).toInt(), vidRes, true)
-                                } else bmpCopy
+                                        if (!isCurrentlyRecording) {
+                                            isCurrentlyRecording = true
+                                            isSavingVideo = false
+                                            try {
+                                                val w = scaledBmp.width - (scaledBmp.width % 16)
+                                                val h = scaledBmp.height - (scaledBmp.height % 16)
+                                                dvrEngine.triggerRecording(HybridAIPipeline.activeVideoPath ?: "alert_${now}.mp4", w, h) 
+                                            } catch(e: Exception){}
+                                        }
+                                        
+                                        try { dvrEngine.appendFrame(scaledBmp) } catch(e: Exception){}
+                                        if (scaledBmp != bmpCopy) scaledBmp.recycle()
 
-                                if (!isCurrentlyRecording) {
-                                    isCurrentlyRecording = true
-                                    isSavingVideo = false
-                                    try {
-                                        // MediaCodec requires width/height to be even numbers
-                                        val w = scaledBmp.width - (scaledBmp.width % 16)
-                                        val h = scaledBmp.height - (scaledBmp.height % 16)
-                                        dvrEngine.triggerRecording(HybridAIPipeline.activeVideoPath ?: "alert_${now}.mp4", w, h) 
-                                    } catch(e: Exception){}
+                                    } else {
+                                        if (isCurrentlyRecording) {
+                                            isCurrentlyRecording = false
+                                            isSavingVideo = true
+                                            try { dvrEngine.stopRecording() } catch(e: Exception){}
+                                            CoroutineScope(Dispatchers.Main).launch { delay(3000); isSavingVideo = false }
+                                        }
+                                    }
+
+                                    val old = latestBitmapRef.getAndSet(bmpCopy)
+                                    old?.recycle() 
                                 }
-                                
-                                try { dvrEngine.appendFrame(scaledBmp) } catch(e: Exception){}
-                                if (scaledBmp != bmpCopy) scaledBmp.recycle()
-
-                            } else {
-                                if (isCurrentlyRecording) {
-                                    isCurrentlyRecording = false
-                                    isSavingVideo = true
-                                    try { dvrEngine.stopRecording() } catch(e: Exception){}
-                                    CoroutineScope(Dispatchers.Main).launch { delay(3000); isSavingVideo = false }
-                                }
+                            } catch(e: Exception) {}
+                            finally {
+                                if (continuation.isActive) continuation.resume(Unit)
                             }
-
-                            val old = latestBitmapRef.getAndSet(bmpCopy)
-                            old?.recycle() 
-                        }
-                    } catch(e: Exception) {}
-                }, 1.0f)
-            } catch(e: Exception) {}
+                        }, 1.0f)
+                    }
+                } catch(e: Exception) {}
+                // Ensure 5 FPS constraint to keep Video Recording and Live Stream stable
+                delay(200) 
+            }
         }
 
         LaunchedEffect(forceScanTrigger, scanIntervalMs) {
@@ -226,7 +228,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 alertHistory.add(0, "[$timeStr] $text")
                 if (alertHistory.size > 50) alertHistory.removeLast()
                 
-                // CRITICAL FIX: The Camera now broadcasts the videoPath over the socket so the Viewer gets it instantly
                 localServer.broadcast(Gson().toJson(mapOf("type" to "ALERT", "text" to text, "videoPath" to vidPath)))
                 dataChannel?.let { dc ->
                     if (dc.state() == DataChannel.State.OPEN) { val buffer = ByteBuffer.wrap(text.toByteArray(Charsets.UTF_8)); dc.send(DataChannel.Buffer(buffer, false)) }
