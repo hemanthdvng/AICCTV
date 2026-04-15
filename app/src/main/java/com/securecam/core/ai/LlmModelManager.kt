@@ -9,7 +9,7 @@ object LlmModelManager {
         val modelName = prefs.getString("selected_model", "None")
         if (modelName == null || modelName == "None") return null
         
-        // FIX: Look in external files dir where DownloadManager saves the .litertlm file
+        // FIX: Match the DownloadManager destination (getExternalFilesDir)
         val modelFile = File(context.getExternalFilesDir(null), modelName)
         return if (modelFile.exists()) modelFile else null
     }
