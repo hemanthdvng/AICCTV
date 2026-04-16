@@ -98,11 +98,11 @@ class MjpegServer(private val context: Context) {
 
     private fun buildVaultHtml(token: String): String {
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-        val folders = dir?.listFiles()?.filter { it.isDirectory && it.name.startsWith("SecureCam_Alert_") }?.sortedByDescending { it.name } ?: emptyList()
+        val folders = dir?.listFiles()?.filter { it.isDirectory && it.name.startsWith("AICCTV_Alert_") }?.sortedByDescending { it.name } ?: emptyList()
         
         var listHtml = ""
         for (f in folders) {
-            val formattedName = f.name.replace("SecureCam_Alert_", "").replace("_", " at ")
+            val formattedName = f.name.replace("AICCTV_Alert_", "").replace("_", " at ")
             listHtml += "<div style='padding:16px; margin:12px 0; background:#161b22; border-radius:12px; border:1px solid #30363d;'>" +
                         "<h3 style='margin:0 0 12px 0; color:#58a6ff; font-size:16px;'>📅 $formattedName</h3>" +
                         "<a href='/play?id=${f.name}&token=$token' style='display:block; text-align:center; background:#238636; padding:10px; border-radius:6px; color:white; text-decoration:none; font-weight:bold;'>▶ Play Recording</a>" +
