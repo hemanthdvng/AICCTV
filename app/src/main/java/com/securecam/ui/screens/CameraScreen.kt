@@ -35,7 +35,6 @@ import com.securecam.core.network.LocalApiServer
 import com.securecam.core.webrtc.*
 import com.securecam.data.repository.EventRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -73,6 +72,9 @@ fun getLocalIpAddress(): String {
 fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val activity = context as? android.app.Activity
+    
+    // CRITICAL FIX: Managed scope bound directly to the Compose lifecycle
+    val scope = rememberCoroutineScope()
     
     var hasCamPerm by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     var hasMicPerm by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) }
@@ -188,7 +190,9 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                                             isCurrentlyRecording = false
                                             isSavingVideo = true
                                             try { dvrEngine.stopRecording() } catch(e: Exception){}
-                                            CoroutineScope(Dispatchers.Main).launch { delay(3000); isSavingVideo = false }
+                                            
+                                            // CRITICAL FIX: Safe tied scope instead of detached global scope
+                                            scope.launch { delay(3000); isSavingVideo = false }
                                         }
                                     }
 
@@ -249,8 +253,12 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
             if (fbUrl.isNotBlank()) {
                 firebaseClient = FirebaseSignalingClient(context, "CAMERA")
                 firebaseClient.clearSignals()
-                firebaseClient.onConnected = { CoroutineScope(Dispatchers.Main).launch { streamStatus = "Listening on WiFi & Firebase" } }
-            } else { CoroutineScope(Dispatchers.Main).launch { streamStatus = "Listening on Local WiFi only" } }
+                
+                // CRITICAL FIX: Safe scoped launch
+                firebaseClient.onConnected = { scope.launch { streamStatus = "Listening on WiFi & Firebase" } }
+            } else { 
+                scope.launch { streamStatus = "Listening on Local WiFi only" } 
+            }
             localServer.start()
             
             var activeSignaler: String? = null
@@ -284,7 +292,8 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                             byteBuffer.get(bytes)
                             val command = String(bytes, Charsets.UTF_8)
                             
-                            CoroutineScope(Dispatchers.Main).launch {
+                            // CRITICAL FIX: Safe scoped launch
+                            scope.launch {
                                 when (command) {
                                     "CMD_SIREN" -> { isScreaming = !isScreaming; alertHistory.add(0, "[SYSTEM] Siren toggled.") }
                                     "CMD_SWITCH_CAM" -> { isFrontCamera = !isFrontCamera; rtcManager.switchCamera(); alertHistory.add(0, "[SYSTEM] Lens switched.") }
@@ -303,11 +312,11 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 val sdpMap = Gson().fromJson(sdpStr, Map::class.java)
                 val sdp = SessionDescription(SessionDescription.Type.fromCanonicalForm(sdpMap["type"] as String), sdpMap["sdp"] as String)
                 peerConnection?.setRemoteDescription(SimpleSdpObserver(), sdp)
-                CoroutineScope(Dispatchers.Main).launch { streamStatus = "LIVE STREAM ACTIVE" }
+                scope.launch { streamStatus = "LIVE STREAM ACTIVE" }
             }
             fun processJoin(signalerType: String) {
                 activeSignaler = signalerType
-                CoroutineScope(Dispatchers.Main).launch { streamStatus = "Viewer Connected! Gathering ICE..." }
+                scope.launch { streamStatus = "Viewer Connected! Gathering ICE..." }
                 buildPeerConnection()
                 peerConnection?.createOffer(object : SimpleSdpObserver() {
                     override fun onCreateSuccess(sdp: SessionDescription?) {
@@ -328,7 +337,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 val map = Gson().fromJson(jsonStr, Map::class.java)
                 when (map["type"]) {
                     "JOIN" -> processJoin("LOCAL")
-                    "DISCONNECT" -> { CoroutineScope(Dispatchers.Main).launch { streamStatus = "Listening on WiFi" } }
+                    "DISCONNECT" -> { scope.launch { streamStatus = "Listening on WiFi" } }
                     "ANSWER" -> { processOffer(Gson().toJson(mapOf("type" to map["typeSDP"], "sdp" to map["sdp"]))) }
                     "ICE" -> { peerConnection?.addIceCandidate(IceCandidate(map["sdpMid"] as String, (map["sdpMLineIndex"] as Double).toInt(), map["sdp"] as String)) }
                     "SYNC_SETTINGS" -> {
@@ -344,7 +353,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                             (map["face_recog_enabled"] as? Boolean)?.let { putBoolean("face_recog_enabled", it) }
                             (map["authorized_faces"] as? String)?.let { putString("authorized_faces", it) }
                         }.apply()
-                        CoroutineScope(Dispatchers.Main).launch {
+                        scope.launch {
                             scanIntervalMs = ((map["scan_interval_sec"] as? Double)?.toFloat() ?: 5f).toLong() * 1000
                             alertHistory.add(0, "[SYSTEM] Settings Synced from Viewer. Please restart stream to apply resolution.")
                         }
@@ -352,7 +361,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 }
             }
 
-            // CRITICAL FIX: Robust try-catch teardown ensures pipeline always stops even if WebRTC crashes
             onDispose {
                 try { localRenderer.release() } catch(e: Exception){}
                 try { mjpegServer.stop() } catch(e: Exception){}
@@ -398,7 +406,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 Spacer(modifier = Modifier.height(72.dp))
             }
 
-            // CRITICAL FIX: Safe Compose State mutations decoupled from onDispose
             Button(
                 onClick = { 
                     isScreaming = false
