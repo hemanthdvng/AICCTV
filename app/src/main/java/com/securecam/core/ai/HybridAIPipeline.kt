@@ -124,16 +124,8 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                 suspendCancellableCoroutine<Boolean> { continuation ->
                     val sysPrompt = "You are a direct computer vision evaluator. Process this image using a token budget of $llmResolution tokens."
                     
-                    val targetPixels = llmResolution * 256
-                    val aspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
-                    val targetHeight = kotlin.math.sqrt(targetPixels.toDouble() / aspectRatio).toInt().coerceAtLeast(1)
-                    val targetWidth = (targetHeight * aspectRatio).toInt().coerceAtLeast(1)
-                    
-                    val scaledBmp = if (bitmap.width > targetWidth) {
-                        Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
-                    } else {
-                        bitmap
-                    }
+                    val maxDim = if (llmResolution > 500) 1024 else 512
+                    val scaledBmp = resizeKeepAspect(bitmap, maxDim)
 
                     llmAnalyzer.analyze(
                         bitmap = scaledBmp, 
@@ -172,5 +164,14 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
             isLlmBusy.set(false)
             if (!bitmap.isRecycled) bitmap.recycle() 
         }
+    }
+
+    private fun resizeKeepAspect(src: Bitmap, maxSide: Int): Bitmap {
+        val longest = maxOf(src.width, src.height)
+        if (longest <= maxSide) return src
+        val scale = maxSide.toFloat() / longest
+        val w = (src.width * scale).toInt().coerceAtLeast(1)
+        val h = (src.height * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(src, w, h, true)
     }
 }
