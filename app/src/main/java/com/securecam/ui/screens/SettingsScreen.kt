@@ -77,6 +77,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
     fun loadPrefs(context: Context) {
         val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
         currentModelName = prefs.getString("selected_model", "None") ?: "None"
+        currentDownloadId = prefs.getLong("current_download_id", -1L)
         try {
             val type = object : TypeToken<List<RegisteredFace>>() {}.type
             _registeredFaces.value = Gson().fromJson(prefs.getString("authorized_faces", "[]") ?: "[]", type) ?: emptyList()
@@ -117,6 +118,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
             
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             currentDownloadId = downloadManager.enqueue(request)
+            context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit().putLong("current_download_id", currentDownloadId).apply()
             Toast.makeText(context, "Download started! App will install it automatically when finished.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {}
     }
@@ -138,13 +140,52 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                                 sourceFile.copyTo(destFile, overwrite = true)
                                 sourceFile.delete() // Cleanup external leak
                                 
-                                context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit().putString("selected_model", "gemma-4-E2B-it.litertlm").apply()
+                                context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit()
+                                    .putString("selected_model", "gemma-4-E2B-it.litertlm")
+                                    .remove("current_download_id")
+                                    .apply()
                                 withContext(Dispatchers.Main) {
+                                    currentDownloadId = -1L
                                     currentModelName = "gemma-4-E2B-it.litertlm"
                                     Toast.makeText(context, "Cloud Model Installed Successfully!", Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
+                    }
+                }
+            } catch (e: Exception) {}
+        }
+    }
+
+    fun checkPendingDownload(context: Context) {
+        if (currentDownloadId == -1L) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                val query = DownloadManager.Query().setFilterById(currentDownloadId)
+                downloadManager.query(query).use { cursor ->
+                    if (cursor != null && cursor.moveToFirst()) {
+                        val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                        when (status) {
+                            DownloadManager.STATUS_SUCCESSFUL -> {
+                                // Download finished while app was away — install it now
+                                processDownloadedModel(context, currentDownloadId)
+                            }
+                            DownloadManager.STATUS_FAILED -> {
+                                // Download failed — clean up so user can retry
+                                context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit().remove("current_download_id").apply()
+                                withContext(Dispatchers.Main) {
+                                    currentDownloadId = -1L
+                                    Toast.makeText(context, "Previous download failed. Tap Download to try again.", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                            // STATUS_RUNNING or STATUS_PENDING: still in progress, broadcast will handle it
+                            else -> {}
+                        }
+                    } else {
+                        // No record in DownloadManager — stale ID, clear it
+                        context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit().remove("current_download_id").apply()
+                        withContext(Dispatchers.Main) { currentDownloadId = -1L }
                     }
                 }
             } catch (e: Exception) {}
@@ -296,6 +337,7 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
 
     LaunchedEffect(Unit) {
         viewModel.loadPrefs(context)
+        viewModel.checkPendingDownload(context)
         try { androidx.core.content.ContextCompat.startForegroundService(context, android.content.Intent(context, com.securecam.service.AlertService::class.java)) } catch(e: Exception){}
         if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
