@@ -18,10 +18,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 class LlmVisionAnalyzer(private val context: Context) {
     private val TAG = "LlmVisionAnalyzer"
     private var engine: Engine? = null
-    
+
     private val llmDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val llmScope = CoroutineScope(llmDispatcher + SupervisorJob())
-    
+
     private val initialized = AtomicBoolean(false)
     private val busy = AtomicBoolean(false)
 
@@ -44,57 +44,83 @@ class LlmVisionAnalyzer(private val context: Context) {
         llmScope.launch {
             initialized.set(false)
             busy.set(false)
-            try { engine?.close() } catch(e: Exception){} finally { engine = null }
+            try { engine?.close() } catch (e: Exception) {} finally { engine = null }
 
             val modelFile = LlmModelManager.getInstalledModel(context)
-            if (modelFile == null) { 
+            if (modelFile == null) {
                 withContext(Dispatchers.Main) { onResult(InitResult.ModelNotFound) }
-                return@launch 
+                return@launch
             }
 
             var backendType = "CPU"
             try {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
                 backendType = prefs.getString("ai_backend", "CPU") ?: "CPU"
+                val visionBackendType = prefs.getString("ai_vision_backend", "GPU") ?: "GPU"
 
-                val backendConfig = when (backendType) {
+                // LLM inference backend: CPU, GPU, or NPU (dedicated silicon)
+                val backendConfig: Backend = when (backendType) {
                     "GPU" -> Backend.GPU()
-                    "NPU" -> Backend.CPU()
-                    else -> Backend.CPU()
+                    "NPU" -> Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
+                    else  -> Backend.CPU()
+                }
+
+                // Vision encoder backend: GPU (fastest) or CPU (most compatible)
+                // Note: NPU is intentionally excluded for the vision encoder — Gemma 3n requires
+                // CPU or GPU for its vision pathway (same behaviour as Google's LiteRT Gallery app).
+                val visionBackendConfig: Backend = when (visionBackendType) {
+                    "CPU" -> Backend.CPU()
+                    else  -> Backend.GPU()
                 }
 
                 val cfg = EngineConfig(
                     modelPath = modelFile.absolutePath,
-                    backend = backendConfig, 
-                    visionBackend = backendConfig,
+                    backend = backendConfig,
+                    visionBackend = visionBackendConfig,
                     cacheDir = context.cacheDir.absolutePath
                 )
-                
+
                 engine = Engine(cfg).also { it.initialize() }
                 initialized.set(true)
                 withContext(Dispatchers.Main) { onResult(InitResult.Success) }
             } catch (e: Throwable) {
-                withContext(Dispatchers.Main) { onResult(InitResult.Error("Init failed ($backendType Error): ${e.message}")) }
+                withContext(Dispatchers.Main) {
+                    onResult(InitResult.Error("Init failed ($backendType): ${e.message}"))
+                }
             }
         }
     }
 
     @OptIn(ExperimentalApi::class)
-    fun analyze(bitmap: Bitmap, systemPrompt: String, userPrompt: String, onToken: (String) -> Unit, onDone: (String) -> Unit, onError: (String) -> Unit) {
+    fun analyze(
+        bitmap: Bitmap,
+        systemPrompt: String,
+        userPrompt: String,
+        onToken: (String) -> Unit,
+        onDone: (String) -> Unit,
+        onError: (String) -> Unit
+    ) {
         if (!initialized.get()) { bitmap.recycle(); onError("Engine not initialized yet"); return }
         if (!busy.compareAndSet(false, true)) { bitmap.recycle(); onError("Engine is busy"); return }
 
         llmScope.launch {
             try {
                 val eng = engine ?: throw IllegalStateException("Engine null")
-                val conversation = eng.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 0.4), systemInstruction = Contents.of(systemPrompt)))
+                val conversation = eng.createConversation(
+                    ConversationConfig(
+                        samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 0.4),
+                        systemInstruction = Contents.of(systemPrompt)
+                    )
+                )
 
                 val imageBytes = bitmap.toPngBytes()
                 val contents = Contents.of(listOf(Content.ImageBytes(imageBytes), Content.Text(userPrompt)))
 
                 val sb = StringBuilder()
-                conversation.sendMessageAsync(contents).collect { message -> sb.append(message.toString()) }
-                
+                conversation.sendMessageAsync(contents).collect { message ->
+                    sb.append(message.toString())
+                }
+
                 withContext(Dispatchers.Main) { onDone(sb.toString().trim()) }
                 conversation.close()
 
@@ -102,7 +128,7 @@ class LlmVisionAnalyzer(private val context: Context) {
                 withContext(Dispatchers.Main) { onError(e.message ?: "Native Inference Error") }
             } finally {
                 busy.set(false)
-                if (!bitmap.isRecycled) bitmap.recycle() 
+                if (!bitmap.isRecycled) bitmap.recycle()
             }
         }
     }
