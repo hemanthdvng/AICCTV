@@ -24,7 +24,9 @@ import javax.inject.Inject
 class AlertService : Service() {
     @Inject lateinit var eventRepository: EventRepository
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var viewerSocket: Socket? = null
+    
+    // CRITICAL FIX: @Volatile secures immediate cross-thread visibility on socket teardown
+    @Volatile private var viewerSocket: Socket? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_STICKY 
@@ -34,7 +36,6 @@ class AlertService : Service() {
         super.onCreate()
         createNotificationChannel()
         
-        // CRITICAL FIX: Android 14+ Foreground Service requirement
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 1,
@@ -168,7 +169,6 @@ class AlertService : Service() {
             .build()
     }
 
-    // CRITICAL FIX: Restart service instantly if killed by OEM task manager swiping
     override fun onTaskRemoved(rootIntent: Intent?) {
         val restartIntent = Intent(applicationContext, AlertService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
