@@ -115,7 +115,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                 .setDescription("Downloading AI CCTV Engine...")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalFilesDir(context, null, "gemma-4-E2B-it.litertlm")
-            
+
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             currentDownloadId = downloadManager.enqueue(request)
             context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit().putLong("current_download_id", currentDownloadId).apply()
@@ -136,10 +136,10 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                             if (localUriStr != null) {
                                 val sourceFile = File(Uri.parse(localUriStr).path!!)
                                 val destFile = File(context.filesDir, "gemma-4-E2B-it.litertlm")
-                                
+
                                 sourceFile.copyTo(destFile, overwrite = true)
-                                sourceFile.delete() // Cleanup external leak
-                                
+                                sourceFile.delete()
+
                                 context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit()
                                     .putString("selected_model", "gemma-4-E2B-it.litertlm")
                                     .remove("current_download_id")
@@ -167,23 +167,17 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                     if (cursor != null && cursor.moveToFirst()) {
                         val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
                         when (status) {
-                            DownloadManager.STATUS_SUCCESSFUL -> {
-                                // Download finished while app was away — install it now
-                                processDownloadedModel(context, currentDownloadId)
-                            }
+                            DownloadManager.STATUS_SUCCESSFUL -> { processDownloadedModel(context, currentDownloadId) }
                             DownloadManager.STATUS_FAILED -> {
-                                // Download failed — clean up so user can retry
                                 context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit().remove("current_download_id").apply()
                                 withContext(Dispatchers.Main) {
                                     currentDownloadId = -1L
                                     Toast.makeText(context, "Previous download failed. Tap Download to try again.", Toast.LENGTH_LONG).show()
                                 }
                             }
-                            // STATUS_RUNNING or STATUS_PENDING: still in progress, broadcast will handle it
                             else -> {}
                         }
                     } else {
-                        // No record in DownloadManager — stale ID, clear it
                         context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE).edit().remove("current_download_id").apply()
                         withContext(Dispatchers.Main) { currentDownloadId = -1L }
                     }
@@ -206,7 +200,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                     currentModelName = "None"
                     Toast.makeText(context, "Model deleted successfully.", Toast.LENGTH_SHORT).show()
                 }
-            } catch(e: Exception){}
+            } catch (e: Exception) {}
         }
     }
 
@@ -251,7 +245,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                 val top = (bounds.centerY() - size / 2).coerceAtLeast(0)
                 val croppedBmp = Bitmap.createBitmap(bmp, left, top, minOf(size, bmp.width - left), minOf(size, bmp.height - top))
                 withContext(Dispatchers.Main) { draftCroppedBitmap = croppedBmp; draftFaceName = "Face ${_registeredFaces.value.size + 1}" }
-            } catch(e: Exception) {}
+            } catch (e: Exception) {}
         }
     }
 
@@ -270,7 +264,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                     _registeredFaces.value = updatedList
                     withContext(Dispatchers.Main) { Toast.makeText(context, "Face added!", Toast.LENGTH_SHORT).show(); draftCroppedBitmap = null }
                 }
-            } catch(e: Exception) {}
+            } catch (e: Exception) {}
         }
     }
     fun cancelFaceRegistration() { draftCroppedBitmap = null }
@@ -284,18 +278,18 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     val clipboardManager = LocalClipboardManager.current
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
-    
+
     var securityToken by remember { mutableStateOf(prefs.getString("security_token", "").takeIf { !it.isNullOrBlank() } ?: UUID.randomUUID().toString().substring(0, 8).also { prefs.edit().putString("security_token", it).apply() }) }
     var viewerMode by remember { mutableStateOf(prefs.getString("viewer_mode", "Local WiFi") ?: "Local WiFi") }
     var menuExpanded by remember { mutableStateOf(false) }
     var appRole by remember { mutableStateOf(prefs.getString("app_role", "Camera") ?: "Camera") }
     var roleExpanded by remember { mutableStateOf(false) }
-    
+
     var targetIp by remember { mutableStateOf(prefs.getString("target_ip", "") ?: "") }
     var fbDbUrl by remember { mutableStateOf(prefs.getString("fb_db_url", "") ?: "") }
     var fbApiKey by remember { mutableStateOf(prefs.getString("fb_api_key", "") ?: "") }
     var fbAppId by remember { mutableStateOf(prefs.getString("fb_app_id", "") ?: "") }
-    
+
     var cameraResolution by remember { mutableStateOf(prefs.getInt("camera_resolution", 1080)) }
     var camResExpanded by remember { mutableStateOf(false) }
     val camResOptions = listOf(1080, 720, 480, 320)
@@ -315,11 +309,17 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     var debugMode by remember { mutableStateOf(prefs.getBoolean("debug_mode", false)) }
     var aiPrompt by remember { mutableStateOf(prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: "") }
 
+    // ── Accelerator selections (mirrors Google's LiteRT Gallery approach) ─────────────────
+    val llmBackendOptions = listOf("CPU", "GPU", "NPU")
+    val visionBackendOptions = listOf("CPU", "GPU")
+    var selectedLlmBackend by remember { mutableStateOf(prefs.getString("ai_backend", "CPU") ?: "CPU") }
+    var selectedVisionBackend by remember { mutableStateOf(prefs.getString("ai_vision_backend", "GPU") ?: "GPU") }
+
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.processFaceRegistration(it, context) } }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { viewModel.importModel(it, context) } }
 
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    
+
     DisposableEffect(Unit) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -338,7 +338,7 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     LaunchedEffect(Unit) {
         viewModel.loadPrefs(context)
         viewModel.checkPendingDownload(context)
-        try { androidx.core.content.ContextCompat.startForegroundService(context, android.content.Intent(context, com.securecam.service.AlertService::class.java)) } catch(e: Exception){}
+        try { androidx.core.content.ContextCompat.startForegroundService(context, android.content.Intent(context, com.securecam.service.AlertService::class.java)) } catch (e: Exception) {}
         if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -354,14 +354,14 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
 
     Scaffold(topBar = { TopAppBar(title = { Text("Settings") }, navigationIcon = { TextButton(onClick = { navController.popBackStack() }) { Text("Back") } }) }) { padding ->
         Column(modifier = Modifier.padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
-            
+
             Text("Device Role & Sync", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(8.dp))
             ExposedDropdownMenuBox(expanded = roleExpanded, onExpandedChange = { roleExpanded = !roleExpanded }) {
                 OutlinedTextField(value = appRole, onValueChange = {}, readOnly = true, label = { Text("Use this device as:") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = roleExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth(), colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors())
                 ExposedDropdownMenu(expanded = roleExpanded, onDismissRequest = { roleExpanded = false }) {
-                    listOf("Camera", "Viewer").forEach { mode -> DropdownMenuItem(text = { Text(mode) }, onClick = { 
-                            appRole = mode; prefs.edit().putString("app_role", mode).apply(); roleExpanded = false 
+                    listOf("Camera", "Viewer").forEach { mode -> DropdownMenuItem(text = { Text(mode) }, onClick = {
+                            appRole = mode; prefs.edit().putString("app_role", mode).apply(); roleExpanded = false
                             if (mode == "Viewer" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
                                 val intent = Intent(AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply { data = Uri.parse("package:${context.packageName}") }
                                 context.startActivity(intent)
@@ -394,14 +394,14 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             Spacer(modifier = Modifier.height(8.dp))
             Text("A unique password to encrypt and secure your stream. Must match exactly on both devices.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             OutlinedTextField(value = securityToken, onValueChange = { securityToken = it; prefs.edit().putString("security_token", it).apply() }, label = { Text("Master Auth Token") }, trailingIcon = { IconButton(onClick = { clipboardManager.setText(AnnotatedString(securityToken)) }) { Text("📋") } }, modifier = Modifier.fillMaxWidth())
-            
+
             if (viewerMode == "Firebase") {
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(value = fbDbUrl, onValueChange = { fbDbUrl = it; prefs.edit().putString("fb_db_url", it).apply() }, label = { Text("Database URL") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = fbApiKey, onValueChange = { fbApiKey = it; prefs.edit().putString("fb_api_key", it).apply() }, label = { Text("API Key") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = fbAppId, onValueChange = { fbAppId = it; prefs.edit().putString("fb_app_id", it).apply() }, label = { Text("App ID") }, modifier = Modifier.fillMaxWidth())
             }
-            
+
             Spacer(modifier = Modifier.height(24.dp))
             HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
@@ -410,15 +410,15 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             Spacer(modifier = Modifier.height(8.dp))
             Text("Higher camera resolution improves AI object detection significantly but uses more Wi-Fi bandwidth. The offline video resolution cannot exceed the live camera resolution.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             ExposedDropdownMenuBox(expanded = camResExpanded, onExpandedChange = { camResExpanded = !camResExpanded }) {
                 OutlinedTextField(value = "${cameraResolution}p HD", onValueChange = {}, readOnly = true, label = { Text("Live Camera Resolution") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = camResExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth(), colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors())
                 ExposedDropdownMenu(expanded = camResExpanded, onDismissRequest = { camResExpanded = false }) {
                     camResOptions.forEach { res ->
-                        DropdownMenuItem(text = { Text("${res}p") }, onClick = { 
+                        DropdownMenuItem(text = { Text("${res}p") }, onClick = {
                             cameraResolution = res; prefs.edit().putInt("camera_resolution", res).apply()
                             if (videoResolution > res) { videoResolution = res; prefs.edit().putInt("video_resolution", res).apply() }
-                            camResExpanded = false 
+                            camResExpanded = false
                         })
                     }
                 }
@@ -456,11 +456,11 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(modifier = Modifier.weight(1f)) { Text("Enable LLM Engine") }; Switch(checked = llmEnabled, onCheckedChange = { llmEnabled = it; prefs.edit().putBoolean("llm_enabled", it).apply() }) }
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(modifier = Modifier.weight(1f)) { Text("Enable Face Recognition") }; Switch(checked = faceRecogEnabled, onCheckedChange = { faceRecogEnabled = it; prefs.edit().putBoolean("face_recog_enabled", it).apply() }) }
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(modifier = Modifier.weight(1f)) { Text("Verbose Debug Mode", style = MaterialTheme.typography.bodySmall, color = Color.Gray) }; Switch(checked = debugMode, onCheckedChange = { debugMode = it; prefs.edit().putBoolean("debug_mode", it).apply() }) }
-            
+
             Spacer(modifier = Modifier.height(16.dp))
             Text("Analyze 1 frame every: ${scanInterval.roundToInt()} seconds", style = MaterialTheme.typography.bodyMedium)
             Slider(value = scanInterval, onValueChange = { scanInterval = it }, onValueChangeFinished = { prefs.edit().putFloat("scan_interval_sec", scanInterval).apply() }, valueRange = 1f..60f)
-            
+
             Spacer(modifier = Modifier.height(16.dp))
             Text("Record Video on Alert for: ${videoRecordLen.roundToInt()} seconds", style = MaterialTheme.typography.bodyMedium)
             Slider(value = videoRecordLen, onValueChange = { videoRecordLen = it }, onValueChangeFinished = { prefs.edit().putFloat("video_record_len", videoRecordLen).apply() }, valueRange = 5f..60f)
@@ -477,6 +477,52 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
                 }
             }
 
+            // ── LLM Accelerator ───────────────────────────────────────────────────────────
+            Spacer(modifier = Modifier.height(20.dp))
+            Text("LLM Accelerator", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "GPU — fastest on most devices. NPU — dedicated AI silicon (Pixel 9+, Galaxy S25+), lowest power. CPU — universal fallback. Re-open Camera screen to apply.",
+                style = MaterialTheme.typography.bodySmall, color = Color.Gray
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                llmBackendOptions.forEachIndexed { index, label ->
+                    SegmentedButton(
+                        selected = selectedLlmBackend == label,
+                        onClick = {
+                            selectedLlmBackend = label
+                            prefs.edit().putString("ai_backend", label).apply()
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = llmBackendOptions.size),
+                        label = { Text(label) }
+                    )
+                }
+            }
+
+            // ── Vision Encoder Accelerator ────────────────────────────────────────────────
+            Spacer(modifier = Modifier.height(20.dp))
+            Text("Vision Encoder Accelerator", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Controls the image tokeniser inside Gemma 3n. GPU is fastest. CPU is needed on devices where GPU vision causes errors. NPU is not supported for the vision pathway.",
+                style = MaterialTheme.typography.bodySmall, color = Color.Gray
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                visionBackendOptions.forEachIndexed { index, label ->
+                    SegmentedButton(
+                        selected = selectedVisionBackend == label,
+                        onClick = {
+                            selectedVisionBackend = label
+                            prefs.edit().putString("ai_vision_backend", label).apply()
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = visionBackendOptions.size),
+                        label = { Text(label) }
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
             Text("AI Vision Prompt", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(8.dp))
@@ -487,7 +533,7 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             Spacer(modifier = Modifier.height(24.dp))
             HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
-            
+
             if (appRole == "Camera") {
                 Text("Local LLM Model", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.height(8.dp))
@@ -496,7 +542,7 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
                 Button(onClick = { filePicker.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth(), enabled = !viewModel.isImporting, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)) { Text("📁 Import Model from Device (.litertlm)") }
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(onClick = { viewModel.downloadCloudModel(context) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))) { Text("☁️ Download AI Model") }
-                
+
                 if (viewModel.currentModelName != "None") {
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(onClick = { viewModel.deleteModel(context) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))) { Text("🗑️ Delete Current Model") }
