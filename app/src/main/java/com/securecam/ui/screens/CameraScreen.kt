@@ -227,7 +227,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 alertHistory.add(0, "[$timeStr] $text")
                 if (alertHistory.size > 50) alertHistory.removeLast()
                 
-                // CRITICAL FIX: Pass exact origin timestamp to TCP and WebRTC
                 val payload = Gson().toJson(mapOf("type" to "ALERT", "text" to text, "videoPath" to vidPath, "timestamp" to event.timestamp))
                 localServer.broadcast(payload)
                 dataChannel?.let { dc ->
@@ -353,17 +352,16 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 }
             }
 
+            // CRITICAL FIX: Robust try-catch teardown ensures pipeline always stops even if WebRTC crashes
             onDispose {
                 try { localRenderer.release() } catch(e: Exception){}
-                isScreaming = false
-                isFlashActive = false
-                mjpegServer.stop()
-                localServer.stop()
-                apiServer.stop()
-                dataChannel?.dispose()
-                peerConnection?.dispose()
-                rtcManager.dispose()
-                viewModel.aiPipeline.stop()
+                try { mjpegServer.stop() } catch(e: Exception){}
+                try { localServer.stop() } catch(e: Exception){}
+                try { apiServer.stop() } catch(e: Exception){}
+                try { dataChannel?.dispose() } catch(e: Exception){}
+                try { peerConnection?.dispose() } catch(e: Exception){}
+                try { rtcManager.dispose() } catch(e: Exception){}
+                try { viewModel.aiPipeline.stop() } catch(e: Exception){}
             }
         }
 
@@ -400,7 +398,16 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 Spacer(modifier = Modifier.height(72.dp))
             }
 
-            Button(onClick = { navController.popBackStack() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)), modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp).height(56.dp).fillMaxWidth(0.6f)) {
+            // CRITICAL FIX: Safe Compose State mutations decoupled from onDispose
+            Button(
+                onClick = { 
+                    isScreaming = false
+                    isFlashActive = false
+                    navController.popBackStack() 
+                }, 
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)), 
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp).height(56.dp).fillMaxWidth(0.6f)
+            ) {
                 Text("END STREAM", style = MaterialTheme.typography.titleMedium)
             }
         }
