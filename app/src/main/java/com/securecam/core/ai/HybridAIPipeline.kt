@@ -25,7 +25,6 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
     private val llmAnalyzer = LlmVisionAnalyzer(context)
     private val biometricEngine = BiometricEngine(context)
     
-    // CRITICAL FIX: AtomicBoolean prevents coroutine suspension race conditions
     private val isLlmBusy = AtomicBoolean(false)
 
     companion object {
@@ -39,9 +38,11 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
     }
     
     fun stop() { 
-        llmAnalyzer.close()
+        try { llmAnalyzer.close() } catch (e: Exception) {}
         try { biometricEngine.close() } catch (e: Exception) {}
         isLlmBusy.set(false) 
+        // CRITICAL FIX: Cancel in-flight frames to prevent indefinite AI execution locks
+        aiScope.coroutineContext[Job]?.cancelChildren()
     }
 
     fun processFrame(bitmap: Bitmap) {
@@ -107,7 +108,6 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
     }
 
     private suspend fun triggerLlmAnalysis(bitmap: Bitmap) {
-        // CRITICAL FIX: compareAndSet prevents dual-execution if two frames pass the earlier check
         if (!isLlmBusy.compareAndSet(false, true)) {
             bitmap.recycle()
             return
