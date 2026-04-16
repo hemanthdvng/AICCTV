@@ -18,8 +18,10 @@
         android:usesCleartextTraffic="true"
         android:name=".SecureCamApp"
         android:allowBackup="true"
-        android:largeHeap="true" 
-        android:label="SecureCam 5"
+        android:largeHeap="true"
+        android:label="AI CCTV"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         tools:targetApi="31">
@@ -34,12 +36,12 @@
             </intent-filter>
         </activity>
 
-        <service 
+        <service
             android:name=".service.WatchTowerService"
             android:exported="false"
             android:foregroundServiceType="camera" />
-            
-        <service 
+
+        <service
             android:name=".service.AlertService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
