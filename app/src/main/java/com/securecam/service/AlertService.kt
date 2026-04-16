@@ -3,6 +3,7 @@ package com.securecam.service
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -32,7 +33,17 @@ class AlertService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(1, buildNotification("AI CCTV Background Service Active"))
+        
+        // CRITICAL FIX: Android 14+ Foreground Service requirement
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                1,
+                buildNotification("AI CCTV Background Service Active"),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0
+            )
+        } else {
+            startForeground(1, buildNotification("AI CCTV Background Service Active"))
+        }
         
         val prefs = getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
 
@@ -155,6 +166,17 @@ class AlertService : Service() {
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .build()
+    }
+
+    // CRITICAL FIX: Restart service instantly if killed by OEM task manager swiping
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val restartIntent = Intent(applicationContext, AlertService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(restartIntent)
+        } else {
+            startService(restartIntent)
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
