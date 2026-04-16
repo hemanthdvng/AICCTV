@@ -57,7 +57,7 @@ class WatchTowerService : LifecycleService() {
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SecureCam WatchTower Active")
+            .setContentTitle("AI CCTV WatchTower Active")
             .setContentText("Camera, Networking, and AI logic are locked to memory.")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
