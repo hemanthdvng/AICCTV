@@ -106,7 +106,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
         val ipAddress = remember { getLocalIpAddress() }
 
         val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
-        var scanIntervalMs by remember { mutableStateOf((prefs.getFloat("scan_interval_sec", 5f) * 1000).toLong()) }
+        var scanIntervalMs by remember { mutableStateOf((prefs.getFloat("scan_interval_sec", 10f) * 1000).toLong()) }
         val securityToken = remember { prefs.getString("security_token", "") ?: "" }
         val localServer = remember { LocalSignalingServer(8081, securityToken) }
         val apiServer = remember { LocalApiServer(8082, securityToken, context) }
@@ -166,7 +166,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                                     val endTime = HybridAIPipeline.activeVideoEndTime
 
                                     if (now < endTime && HybridAIPipeline.activeVideoPath != null) {
-                                        val vidRes = prefs.getInt("video_resolution", 720)
+                                        val vidRes = prefs.getInt("video_resolution", 480)
                                         val scaledBmp = if (bmpCopy.height > vidRes) {
                                             val ratio = bmpCopy.width.toFloat() / bmpCopy.height.toFloat()
                                             Bitmap.createScaledBitmap(bmpCopy, (vidRes * ratio).toInt(), vidRes, true)
@@ -354,7 +354,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                             (map["authorized_faces"] as? String)?.let { putString("authorized_faces", it) }
                         }.apply()
                         scope.launch {
-                            scanIntervalMs = ((map["scan_interval_sec"] as? Double)?.toFloat() ?: 5f).toLong() * 1000
+                            scanIntervalMs = ((map["scan_interval_sec"] as? Double)?.toFloat() ?: 10f).toLong() * 1000
                             alertHistory.add(0, "[SYSTEM] Settings Synced from Viewer. Please restart stream to apply resolution.")
                         }
                     }
