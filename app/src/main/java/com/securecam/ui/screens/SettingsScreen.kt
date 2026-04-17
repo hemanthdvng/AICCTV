@@ -313,7 +313,7 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     val llmBackendOptions = listOf("CPU", "GPU", "NPU")
     val visionBackendOptions = listOf("CPU", "GPU")
     var selectedLlmBackend by remember { mutableStateOf(prefs.getString("ai_backend", "CPU") ?: "CPU") }
-    var selectedVisionBackend by remember { mutableStateOf(prefs.getString("ai_vision_backend", "GPU") ?: "GPU") }
+    var selectedVisionBackend by remember { mutableStateOf(prefs.getString("ai_vision_backend", "CPU") ?: "CPU") }
 
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.processFaceRegistration(it, context) } }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { viewModel.importModel(it, context) } }
