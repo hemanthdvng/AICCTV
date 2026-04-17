@@ -56,21 +56,19 @@ class LlmVisionAnalyzer(private val context: Context) {
             try {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
                 backendType = prefs.getString("ai_backend", "CPU") ?: "CPU"
-                val visionBackendType = prefs.getString("ai_vision_backend", "GPU") ?: "GPU"
+                
+                // Fallback updated to CPU for max device compatibility out of the box
+                val visionBackendType = prefs.getString("ai_vision_backend", "CPU") ?: "CPU"
 
-                // LLM inference backend: CPU, GPU, or NPU (dedicated silicon)
                 val backendConfig: Backend = when (backendType) {
                     "GPU" -> Backend.GPU()
                     "NPU" -> Backend.NPU(nativeLibraryDir = context.applicationInfo.nativeLibraryDir)
                     else  -> Backend.CPU()
                 }
 
-                // Vision encoder backend: GPU (fastest) or CPU (most compatible)
-                // Note: NPU is intentionally excluded for the vision encoder — Gemma 3n requires
-                // CPU or GPU for its vision pathway (same behaviour as Google's LiteRT Gallery app).
                 val visionBackendConfig: Backend = when (visionBackendType) {
-                    "CPU" -> Backend.CPU()
-                    else  -> Backend.GPU()
+                    "GPU" -> Backend.GPU()
+                    else  -> Backend.CPU()
                 }
 
                 val cfg = EngineConfig(
@@ -134,7 +132,6 @@ class LlmVisionAnalyzer(private val context: Context) {
     }
 
     private fun Bitmap.toPngBytes(): ByteArray {
-        // PNG is lossless — preserves fine detail (clock hands, distant text, etc.)
         return ByteArrayOutputStream().also { compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
     }
 }
