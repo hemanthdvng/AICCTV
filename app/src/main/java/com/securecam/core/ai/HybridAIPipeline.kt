@@ -26,7 +26,6 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
     private val biometricEngine = BiometricEngine(context)
     
     private val isLlmBusy = AtomicBoolean(false)
-    private val isRunning = AtomicBoolean(false) // FIX: Prevent race conditions
 
     companion object {
         var activeVideoPath: String? = null
@@ -34,28 +33,19 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
     }
 
     fun start() {
-        isRunning.set(true)
         llmAnalyzer.initialize {}
         aiScope.launch { try { biometricEngine.initialize() } catch (e: Exception) {} }
     }
     
     fun stop() { 
-        isRunning.set(false)
-        // CRITICAL FIX: Cancel in-flight frames to prevent indefinite AI execution locks
-        aiScope.coroutineContext[Job]?.cancelChildren()
-        
         try { llmAnalyzer.close() } catch (e: Exception) {}
         try { biometricEngine.close() } catch (e: Exception) {}
         isLlmBusy.set(false) 
+        // CRITICAL FIX: Cancel in-flight frames to prevent indefinite AI execution locks
+        aiScope.coroutineContext[Job]?.cancelChildren()
     }
 
     fun processFrame(bitmap: Bitmap) {
-        // FIX: Drop frames immediately if shutting down
-        if (!isRunning.get()) {
-            if (!bitmap.isRecycled) bitmap.recycle()
-            return
-        }
-        
         aiScope.launch {
             try {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
