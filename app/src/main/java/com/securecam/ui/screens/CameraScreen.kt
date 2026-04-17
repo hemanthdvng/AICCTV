@@ -212,7 +212,8 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
 
         LaunchedEffect(forceScanTrigger, scanIntervalMs) {
             while(isActive) {
-                delay(if (forceScanTrigger > 0) 500 else scanIntervalMs)
+                val currentIntervalMs = (prefs.getFloat("scan_interval_sec", 5f) * 1000).toLong()
+                delay(if (forceScanTrigger > 0) 500 else currentIntervalMs)
                 latestBitmapRef.getAndSet(null)?.let { bmp ->
                     if (!bmp.isRecycled) {
                         try { val copy = bmp.copy(Bitmap.Config.ARGB_8888, false); if (copy != null) { viewModel.aiPipeline.processFrame(copy) } } catch (e: Exception) {}
@@ -354,7 +355,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                             (map["authorized_faces"] as? String)?.let { putString("authorized_faces", it) }
                         }.apply()
                         scope.launch {
-                            scanIntervalMs = ((map["scan_interval_sec"] as? Double)?.toFloat() ?: 5f).toLong() * 1000
+                            scanIntervalMs = ((map["scan_interval_sec"] as? Double)?.toFloat() ?: 10f).toLong() * 1000
                             alertHistory.add(0, "[SYSTEM] Settings Synced from Viewer. Please restart stream to apply resolution.")
                         }
                     }
