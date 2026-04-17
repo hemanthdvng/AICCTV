@@ -32,11 +32,12 @@ class LlmVisionAnalyzer(private val context: Context) {
     }
 
     fun close() {
-        llmScope.launch {
-            initialized.set(false)
-            busy.set(false)
-            try { engine?.close() } catch (e: Exception) {} finally { engine = null }
-        }
+        // FIX: Cancel active inference coroutines to prevent native crashes during teardown
+        llmScope.coroutineContext[Job]?.cancelChildren()
+        
+        initialized.set(false)
+        busy.set(false)
+        try { engine?.close() } catch (e: Exception) {} finally { engine = null }
     }
 
     @OptIn(ExperimentalApi::class)
@@ -99,7 +100,10 @@ class LlmVisionAnalyzer(private val context: Context) {
                 conversation.close()
 
             } catch (e: Throwable) {
-                withContext(Dispatchers.Main) { onError(e.message ?: "Native Inference Error") }
+                // Ignore CancellationExceptions caused by closing the camera
+                if (e !is CancellationException) {
+                    withContext(Dispatchers.Main) { onError(e.message ?: "Native Inference Error") }
+                }
             } finally {
                 busy.set(false)
                 if (!bitmap.isRecycled) bitmap.recycle() 
