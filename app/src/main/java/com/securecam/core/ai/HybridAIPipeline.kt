@@ -26,6 +26,7 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
     private val biometricEngine = BiometricEngine(context)
     
     private val isLlmBusy = AtomicBoolean(false)
+    private val isRunning = AtomicBoolean(false)
 
     companion object {
         var activeVideoPath: String? = null
@@ -33,19 +34,26 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
     }
 
     fun start() {
+        isRunning.set(true)
         llmAnalyzer.initialize {}
         aiScope.launch { try { biometricEngine.initialize() } catch (e: Exception) {} }
     }
     
     fun stop() { 
+        isRunning.set(false)
+        aiScope.coroutineContext[Job]?.cancelChildren()
+        
         try { llmAnalyzer.close() } catch (e: Exception) {}
         try { biometricEngine.close() } catch (e: Exception) {}
         isLlmBusy.set(false) 
-        // CRITICAL FIX: Cancel in-flight frames to prevent indefinite AI execution locks
-        aiScope.coroutineContext[Job]?.cancelChildren()
     }
 
     fun processFrame(bitmap: Bitmap) {
+        if (!isRunning.get()) {
+            if (!bitmap.isRecycled) bitmap.recycle()
+            return
+        }
+        
         aiScope.launch {
             try {
                 val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
@@ -83,7 +91,7 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                                     val namesList = recognizedNames.joinToString(", ")
                                     
                                     val now = System.currentTimeMillis()
-                                    val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
+                                    val recordLenMs = (prefs.getFloat("video_record_len", 8f) * 1000).toLong()
                                     if (now > activeVideoEndTime) { activeVideoPath = "face_${now}.mp4" }
                                     activeVideoEndTime = now + recordLenMs
                                     prefs.edit().putString("active_dvr_file", activeVideoPath).apply()
@@ -115,8 +123,8 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
         
         val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
-        val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
-        val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
+        val customPrompt = prefs.getString("prompt_usr", "Report EXACTLY with YES if you see a clock else reply EXACTLY with CLEAR.") ?: ""
+        val recordLenMs = (prefs.getFloat("video_record_len", 8f) * 1000).toLong()
         val llmResolution = prefs.getInt("llm_resolution", 1120)
 
         try {
