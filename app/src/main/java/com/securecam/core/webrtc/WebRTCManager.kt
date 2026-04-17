@@ -29,7 +29,6 @@ open class SimplePeerConnectionObserver : PeerConnection.Observer {
 
 class WebRTCManager(private val context: Context) {
     
-    // FIX 1: Lock initialization to a static companion object so it only fires ONCE per app launch
     companion object {
         private var isInitialized = false
         fun initWebRTC(context: Context) {
@@ -78,7 +77,7 @@ class WebRTCManager(private val context: Context) {
         val surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", rootEglBase.eglBaseContext)
         val videoSource = peerConnectionFactory?.createVideoSource(videoCapturer!!.isScreencast)
         videoCapturer?.initialize(surfaceTextureHelper, context, videoSource?.capturerObserver)
-        videoCapturer?.startCapture((context.getSharedPreferences("securecam_prefs", android.content.Context.MODE_PRIVATE).getInt("camera_resolution", 1080) * 16) / 9, context.getSharedPreferences("securecam_prefs", android.content.Context.MODE_PRIVATE).getInt("camera_resolution", 1080), 30)
+        videoCapturer?.startCapture((context.getSharedPreferences("securecam_prefs", android.content.Context.MODE_PRIVATE).getInt("camera_resolution", 720) * 16) / 9, context.getSharedPreferences("securecam_prefs", android.content.Context.MODE_PRIVATE).getInt("camera_resolution", 720), 30)
 
         val videoTrack = peerConnectionFactory?.createVideoTrack("video_track", videoSource)
         videoTrack?.addSink(renderer)
