@@ -2,11 +2,9 @@ package com.securecam.core.ai
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.tensorflow.lite.Interpreter
-import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -21,48 +19,16 @@ class BiometricEngine(private val context: Context) {
     private val EMBEDDING_SIZE = 192
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
-        val modelFile = File(context.filesDir, "mobilefacenet.tflite")
+        val assetManager = context.assets
+        val modelDescriptor = assetManager.openFd("mobilefacenet.tflite")
         
-        if (modelFile.exists() && modelFile.length() < 1000000) {
-            modelFile.delete()
-        }
-
-        if (!modelFile.exists()) {
-            val mirrors = listOf(
-                "https://raw.githubusercontent.com/MCarlomagno/FaceRecognitionAuth/master/assets/mobilefacenet.tflite",
-                "https://raw.githubusercontent.com/Rajatkhandouja/Face-Recognition-Android/master/app/src/main/assets/mobile_face_net.tflite",
-                "https://raw.githubusercontent.com/shubham0204/Face_Recognition_with_FaceNet_Android/master/app/src/main/assets/mobile_face_net.tflite"
-            )
-            
-            var downloaded = false
-            for (urlStr in mirrors) {
-                try {
-                    val url = java.net.URL(urlStr)
-                    val connection = url.openConnection() as java.net.HttpURLConnection
-                    connection.requestMethod = "GET"
-                    connection.connectTimeout = 10000
-                    connection.readTimeout = 10000
-                    connection.connect()
-                    
-                    if (connection.responseCode == java.net.HttpURLConnection.HTTP_OK) {
-                        connection.inputStream.use { input ->
-                            modelFile.outputStream().use { output -> input.copyTo(output) }
-                        }
-                        downloaded = true
-                        break
-                    }
-                } catch (e: Exception) {}
-            }
-            
-            if (!downloaded) {
-                throw IllegalStateException("All GitHub model mirrors failed (HTTP 404).")
-            }
-        }
-
-        // CRITICAL FIX: Close File Descriptors cleanly after mapping
-        FileInputStream(modelFile).use { fileInputStream ->
+        FileInputStream(modelDescriptor.fileDescriptor).use { fileInputStream ->
             fileInputStream.channel.use { fileChannel ->
-                val modelBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, modelFile.length())
+                val modelBuffer = fileChannel.map(
+                    FileChannel.MapMode.READ_ONLY, 
+                    modelDescriptor.startOffset, 
+                    modelDescriptor.declaredLength
+                )
                 val options = Interpreter.Options().apply { numThreads = 4 }
                 interpreter = Interpreter(modelBuffer, options)
             }
