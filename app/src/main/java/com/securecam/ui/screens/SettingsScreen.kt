@@ -213,10 +213,10 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                 out.println(token)
                 val syncData = mapOf(
                     "type" to "SYNC_SETTINGS",
-                    "scan_interval_sec" to prefs.getFloat("scan_interval_sec", 5f).toDouble(),
-                    "video_record_len" to prefs.getFloat("video_record_len", 15f).toDouble(),
-                    "camera_resolution" to prefs.getInt("camera_resolution", 1080),
-                    "video_resolution" to prefs.getInt("video_resolution", 720),
+                    "scan_interval_sec" to prefs.getFloat("scan_interval_sec", 10f).toDouble(),
+                    "video_record_len" to prefs.getFloat("video_record_len", 8f).toDouble(),
+                    "camera_resolution" to prefs.getInt("camera_resolution", 360),
+                    "video_resolution" to prefs.getInt("video_resolution", 360),
                     "llm_resolution" to prefs.getInt("llm_resolution", 1120),
                     "confidence_threshold" to prefs.getFloat("confidence_threshold", 0.60f).toDouble(),
                     "prompt_usr" to prefs.getString("prompt_usr", ""),
@@ -290,16 +290,16 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     var fbApiKey by remember { mutableStateOf(prefs.getString("fb_api_key", "") ?: "") }
     var fbAppId by remember { mutableStateOf(prefs.getString("fb_app_id", "") ?: "") }
 
-    var cameraResolution by remember { mutableStateOf(prefs.getInt("camera_resolution", 1080)) }
+    var cameraResolution by remember { mutableStateOf(prefs.getInt("camera_resolution", 360)) }
     var camResExpanded by remember { mutableStateOf(false) }
-    val camResOptions = listOf(1080, 720, 480, 320)
+    val camResOptions = listOf(1080, 720, 480, 360, 320)
 
-    var videoResolution by remember { mutableStateOf(prefs.getInt("video_resolution", 720)) }
+    var videoResolution by remember { mutableStateOf(prefs.getInt("video_resolution", 360)) }
     var vidResExpanded by remember { mutableStateOf(false) }
     val vidResOptions = camResOptions.filter { it <= cameraResolution }
 
-    var scanInterval by remember { mutableStateOf(prefs.getFloat("scan_interval_sec", 5f).coerceIn(1f, 60f)) }
-    var videoRecordLen by remember { mutableStateOf(prefs.getFloat("video_record_len", 15f).coerceIn(5f, 60f)) }
+    var scanInterval by remember { mutableStateOf(prefs.getFloat("scan_interval_sec", 10f).coerceIn(1f, 60f)) }
+    var videoRecordLen by remember { mutableStateOf(prefs.getFloat("video_record_len", 8f).coerceIn(5f, 60f)) }
     var llmResolution by remember { mutableStateOf(prefs.getInt("llm_resolution", 1120)) }
     var resExpanded by remember { mutableStateOf(false) }
 
@@ -307,13 +307,13 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     var llmEnabled by remember { mutableStateOf(prefs.getBoolean("llm_enabled", true)) }
     var faceRecogEnabled by remember { mutableStateOf(prefs.getBoolean("face_recog_enabled", false)) }
     var debugMode by remember { mutableStateOf(prefs.getBoolean("debug_mode", false)) }
-    var aiPrompt by remember { mutableStateOf(prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: "") }
+    var aiPrompt by remember { mutableStateOf(prefs.getString("prompt_usr", "If you see a clock reply with EXACTLY YES else CLEAR.") ?: "") }
 
     // ── Accelerator selections (mirrors Google's LiteRT Gallery approach) ─────────────────
     val llmBackendOptions = listOf("CPU", "GPU", "NPU")
     val visionBackendOptions = listOf("CPU", "GPU")
     var selectedLlmBackend by remember { mutableStateOf(prefs.getString("ai_backend", "CPU") ?: "CPU") }
-    var selectedVisionBackend by remember { mutableStateOf(prefs.getString("ai_vision_backend", "GPU") ?: "GPU") }
+    var selectedVisionBackend by remember { mutableStateOf(prefs.getString("ai_vision_backend", "CPU") ?: "CPU") }
 
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.processFaceRegistration(it, context) } }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { viewModel.importModel(it, context) } }
