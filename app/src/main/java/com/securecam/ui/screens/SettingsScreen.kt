@@ -307,6 +307,7 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     var llmEnabled by remember { mutableStateOf(prefs.getBoolean("llm_enabled", true)) }
     var faceRecogEnabled by remember { mutableStateOf(prefs.getBoolean("face_recog_enabled", false)) }
     var debugMode by remember { mutableStateOf(prefs.getBoolean("debug_mode", false)) }
+    var showBiometricDisclosure by remember { mutableStateOf(false) }
     var aiPrompt by remember { mutableStateOf(prefs.getString("prompt_usr", "Report EXACTLY with YES if you see a clock else reply EXACTLY with CLEAR.") ?: "") }
 
     // ── Accelerator selections (mirrors Google's LiteRT Gallery approach) ─────────────────
@@ -349,6 +350,25 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             onDismissRequest = { viewModel.cancelFaceRegistration() }, title = { Text("Confirm Face") },
             text = { Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) { Image(bitmap = viewModel.draftCroppedBitmap!!.asImageBitmap(), contentDescription = null, modifier = Modifier.size(150.dp).clip(CircleShape)); Spacer(modifier = Modifier.height(16.dp)); OutlinedTextField(value = viewModel.draftFaceName, onValueChange = { viewModel.draftFaceName = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth()) } },
             confirmButton = { Button(onClick = { viewModel.confirmFaceRegistration(context) }) { Text("Save") } }, dismissButton = { TextButton(onClick = { viewModel.cancelFaceRegistration() }) { Text("Cancel") } }
+        )
+    }
+
+    if (showBiometricDisclosure) {
+        AlertDialog(
+            onDismissRequest = { showBiometricDisclosure = false },
+            title = { Text("Biometric Data Collection") },
+            text = { Text("AI CCTV collects facial scan data to recognize authorized users. This data is processed and stored entirely locally on your device and is never shared or uploaded to any server. Do you consent to this local data collection?") },
+            confirmButton = {
+                Button(onClick = {
+                    showBiometricDisclosure = false
+                    prefs.edit().putBoolean("biometric_consent_given", true).apply()
+                    faceRecogEnabled = true
+                    prefs.edit().putBoolean("face_recog_enabled", true).apply()
+                }) { Text("I Agree") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBiometricDisclosure = false }) { Text("Decline") }
+            }
         )
     }
 
@@ -454,7 +474,17 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
             Text("Device Alerts & AI Tuning", style = MaterialTheme.typography.titleMedium)
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(modifier = Modifier.weight(1f)) { Text("Popup Notifications") }; Switch(checked = popupNotifications, onCheckedChange = { popupNotifications = it; prefs.edit().putBoolean("enable_notifications", it).apply() }) }
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(modifier = Modifier.weight(1f)) { Text("Enable LLM Engine") }; Switch(checked = llmEnabled, onCheckedChange = { llmEnabled = it; prefs.edit().putBoolean("llm_enabled", it).apply() }) }
-            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(modifier = Modifier.weight(1f)) { Text("Enable Face Recognition") }; Switch(checked = faceRecogEnabled, onCheckedChange = { faceRecogEnabled = it; prefs.edit().putBoolean("face_recog_enabled", it).apply() }) }
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { 
+                Column(modifier = Modifier.weight(1f)) { Text("Enable Face Recognition") }
+                Switch(checked = faceRecogEnabled, onCheckedChange = { isChecked -> 
+                    if (isChecked && !prefs.getBoolean("biometric_consent_given", false)) {
+                        showBiometricDisclosure = true
+                    } else {
+                        faceRecogEnabled = isChecked
+                        prefs.edit().putBoolean("face_recog_enabled", isChecked).apply()
+                    }
+                }) 
+            }
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(modifier = Modifier.weight(1f)) { Text("Verbose Debug Mode", style = MaterialTheme.typography.bodySmall, color = Color.Gray) }; Switch(checked = debugMode, onCheckedChange = { debugMode = it; prefs.edit().putBoolean("debug_mode", it).apply() }) }
 
             Spacer(modifier = Modifier.height(16.dp))
