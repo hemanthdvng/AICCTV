@@ -27,7 +27,7 @@ jobs:
         keytool -genkey -v -keystore release.jks -alias securecam -keyalg RSA -keysize 2048 -validity 10000 -storepass "${{ secrets.KEYSTORE_PASSWORD }}" -keypass "${{ secrets.KEYSTORE_PASSWORD }}" -dname "CN=AI CCTV, OU=Android, O=SecureCam, C=IN"
         
     - name: Build Release AAB
-      run: ./gradlew bundleRelease
+      run: gradle bundleRelease
 
     - name: Sign AAB
       run: |
