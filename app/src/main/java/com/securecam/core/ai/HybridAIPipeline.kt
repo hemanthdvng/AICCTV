@@ -83,7 +83,7 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
                                     val namesList = recognizedNames.joinToString(", ")
                                     
                                     val now = System.currentTimeMillis()
-                                    val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
+                                    val recordLenMs = (prefs.getFloat("video_record_len", 8f) * 1000).toLong()
                                     if (now > activeVideoEndTime) { activeVideoPath = "face_${now}.mp4" }
                                     activeVideoEndTime = now + recordLenMs
                                     prefs.edit().putString("active_dvr_file", activeVideoPath).apply()
@@ -115,8 +115,8 @@ class HybridAIPipeline @Inject constructor(@ApplicationContext private val conte
         
         val prefs = context.getSharedPreferences("securecam_prefs", Context.MODE_PRIVATE)
         val confThreshold = prefs.getFloat("confidence_threshold", 0.60f)
-        val customPrompt = prefs.getString("prompt_usr", "Report if you see a clock. If you do not see it, reply EXACTLY with CLEAR.") ?: ""
-        val recordLenMs = (prefs.getFloat("video_record_len", 15f) * 1000).toLong()
+        val customPrompt = prefs.getString("prompt_usr", "If you see a person reply with EXACTLY 'YES' else reply with EXACTLY 'CLEAR'.") ?: ""
+        val recordLenMs = (prefs.getFloat("video_record_len", 8f) * 1000).toLong()
         val llmResolution = prefs.getInt("llm_resolution", 1120)
 
         try {
