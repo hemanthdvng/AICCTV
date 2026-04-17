@@ -213,10 +213,10 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
                 out.println(token)
                 val syncData = mapOf(
                     "type" to "SYNC_SETTINGS",
-                    "scan_interval_sec" to prefs.getFloat("scan_interval_sec", 5f).toDouble(),
+                    "scan_interval_sec" to prefs.getFloat("scan_interval_sec", 10f).toDouble(),
                     "video_record_len" to prefs.getFloat("video_record_len", 15f).toDouble(),
-                    "camera_resolution" to prefs.getInt("camera_resolution", 1080),
-                    "video_resolution" to prefs.getInt("video_resolution", 720),
+                    "camera_resolution" to prefs.getInt("camera_resolution", 480),
+                    "video_resolution" to prefs.getInt("video_resolution", 480),
                     "llm_resolution" to prefs.getInt("llm_resolution", 1120),
                     "confidence_threshold" to prefs.getFloat("confidence_threshold", 0.60f).toDouble(),
                     "prompt_usr" to prefs.getString("prompt_usr", ""),
@@ -290,15 +290,15 @@ fun SettingsScreen(navController: NavController, viewModel: SettingsViewModel = 
     var fbApiKey by remember { mutableStateOf(prefs.getString("fb_api_key", "") ?: "") }
     var fbAppId by remember { mutableStateOf(prefs.getString("fb_app_id", "") ?: "") }
 
-    var cameraResolution by remember { mutableStateOf(prefs.getInt("camera_resolution", 1080)) }
+    var cameraResolution by remember { mutableStateOf(prefs.getInt("camera_resolution", 480)) }
     var camResExpanded by remember { mutableStateOf(false) }
     val camResOptions = listOf(1080, 720, 480, 320)
 
-    var videoResolution by remember { mutableStateOf(prefs.getInt("video_resolution", 720)) }
+    var videoResolution by remember { mutableStateOf(prefs.getInt("video_resolution", 480)) }
     var vidResExpanded by remember { mutableStateOf(false) }
     val vidResOptions = camResOptions.filter { it <= cameraResolution }
 
-    var scanInterval by remember { mutableStateOf(prefs.getFloat("scan_interval_sec", 5f).coerceIn(1f, 60f)) }
+    var scanInterval by remember { mutableStateOf(prefs.getFloat("scan_interval_sec", 10f).coerceIn(1f, 60f)) }
     var videoRecordLen by remember { mutableStateOf(prefs.getFloat("video_record_len", 15f).coerceIn(5f, 60f)) }
     var llmResolution by remember { mutableStateOf(prefs.getInt("llm_resolution", 1120)) }
     var resExpanded by remember { mutableStateOf(false) }
