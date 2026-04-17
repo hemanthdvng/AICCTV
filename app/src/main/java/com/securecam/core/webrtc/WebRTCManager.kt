@@ -78,7 +78,7 @@ class WebRTCManager(private val context: Context) {
         val surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", rootEglBase.eglBaseContext)
         val videoSource = peerConnectionFactory?.createVideoSource(videoCapturer!!.isScreencast)
         videoCapturer?.initialize(surfaceTextureHelper, context, videoSource?.capturerObserver)
-        videoCapturer?.startCapture((context.getSharedPreferences("securecam_prefs", android.content.Context.MODE_PRIVATE).getInt("camera_resolution", 1080) * 16) / 9, context.getSharedPreferences("securecam_prefs", android.content.Context.MODE_PRIVATE).getInt("camera_resolution", 1080), 30)
+        videoCapturer?.startCapture((context.getSharedPreferences("securecam_prefs", android.content.Context.MODE_PRIVATE).getInt("camera_resolution", 480) * 16) / 9, context.getSharedPreferences("securecam_prefs", android.content.Context.MODE_PRIVATE).getInt("camera_resolution", 480), 30)
 
         val videoTrack = peerConnectionFactory?.createVideoTrack("video_track", videoSource)
         videoTrack?.addSink(renderer)
