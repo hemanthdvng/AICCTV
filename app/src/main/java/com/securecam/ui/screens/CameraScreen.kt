@@ -73,7 +73,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
     val context = LocalContext.current
     val activity = context as? android.app.Activity
     
-    // CRITICAL FIX: Managed scope bound directly to the Compose lifecycle
     val scope = rememberCoroutineScope()
     
     var hasCamPerm by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
@@ -166,7 +165,7 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                                     val endTime = HybridAIPipeline.activeVideoEndTime
 
                                     if (now < endTime && HybridAIPipeline.activeVideoPath != null) {
-                                        val vidRes = prefs.getInt("video_resolution", 720)
+                                        val vidRes = prefs.getInt("video_resolution", 320)
                                         val scaledBmp = if (bmpCopy.height > vidRes) {
                                             val ratio = bmpCopy.width.toFloat() / bmpCopy.height.toFloat()
                                             Bitmap.createScaledBitmap(bmpCopy, (vidRes * ratio).toInt(), vidRes, true)
@@ -191,7 +190,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                                             isSavingVideo = true
                                             try { dvrEngine.stopRecording() } catch(e: Exception){}
                                             
-                                            // CRITICAL FIX: Safe tied scope instead of detached global scope
                                             scope.launch { delay(3000); isSavingVideo = false }
                                         }
                                     }
@@ -254,7 +252,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                 firebaseClient = FirebaseSignalingClient(context, "CAMERA")
                 firebaseClient.clearSignals()
                 
-                // CRITICAL FIX: Safe scoped launch
                 firebaseClient.onConnected = { scope.launch { streamStatus = "Listening on WiFi & Firebase" } }
             } else { 
                 scope.launch { streamStatus = "Listening on Local WiFi only" } 
@@ -292,7 +289,6 @@ fun CameraScreen(navController: NavController, viewModel: CameraViewModel = hilt
                             byteBuffer.get(bytes)
                             val command = String(bytes, Charsets.UTF_8)
                             
-                            // CRITICAL FIX: Safe scoped launch
                             scope.launch {
                                 when (command) {
                                     "CMD_SIREN" -> { isScreaming = !isScreaming; alertHistory.add(0, "[SYSTEM] Siren toggled.") }
