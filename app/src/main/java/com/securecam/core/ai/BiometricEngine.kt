@@ -21,52 +21,15 @@ class BiometricEngine(private val context: Context) {
     private val EMBEDDING_SIZE = 192
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
-        val modelFile = File(context.filesDir, "mobilefacenet.tflite")
-        
-        if (modelFile.exists() && modelFile.length() < 1000000) {
-            modelFile.delete()
-        }
-
-        if (!modelFile.exists()) {
-            val mirrors = listOf(
-                "https://raw.githubusercontent.com/MCarlomagno/FaceRecognitionAuth/master/assets/mobilefacenet.tflite",
-                "https://raw.githubusercontent.com/Rajatkhandouja/Face-Recognition-Android/master/app/src/main/assets/mobile_face_net.tflite",
-                "https://raw.githubusercontent.com/shubham0204/Face_Recognition_with_FaceNet_Android/master/app/src/main/assets/mobile_face_net.tflite"
-            )
-            
-            var downloaded = false
-            for (urlStr in mirrors) {
-                try {
-                    val url = java.net.URL(urlStr)
-                    val connection = url.openConnection() as java.net.HttpURLConnection
-                    connection.requestMethod = "GET"
-                    connection.connectTimeout = 10000
-                    connection.readTimeout = 10000
-                    connection.connect()
-                    
-                    if (connection.responseCode == java.net.HttpURLConnection.HTTP_OK) {
-                        connection.inputStream.use { input ->
-                            modelFile.outputStream().use { output -> input.copyTo(output) }
-                        }
-                        downloaded = true
-                        break
-                    }
-                } catch (e: Exception) {}
-            }
-            
-            if (!downloaded) {
-                throw IllegalStateException("All GitHub model mirrors failed (HTTP 404).")
+        // Copy bundled asset to cacheDir on first run for reliable Interpreter loading
+        val modelFile = File(context.cacheDir, "mobilefacenet.tflite")
+        if (!modelFile.exists() || modelFile.length() < 1_000_000L) {
+            context.assets.open("mobilefacenet.tflite").use { input ->
+                modelFile.outputStream().use { output -> input.copyTo(output) }
             }
         }
-
-        // CRITICAL FIX: Close File Descriptors cleanly after mapping
-        FileInputStream(modelFile).use { fileInputStream ->
-            fileInputStream.channel.use { fileChannel ->
-                val modelBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, modelFile.length())
-                val options = Interpreter.Options().apply { numThreads = 4 }
-                interpreter = Interpreter(modelBuffer, options)
-            }
-        }
+        val options = Interpreter.Options().apply { numThreads = 4 }
+        interpreter = Interpreter(modelFile, options)
     }
 
     suspend fun getFaceEmbedding(bitmap: Bitmap): FloatArray? = withContext(Dispatchers.Default) {
